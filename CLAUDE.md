@@ -12,9 +12,10 @@ había verbos huérfanos donde no los había.
 
 ## Qué es este archivo
 
-Un año de mediciones contra la API de UXP de Premiere, ordenadas por lo que enseñan. **Casi
-todo lo que está acá se pagó con un crash, con material roto o con horas perdidas
-diagnosticando en el lugar equivocado.**
+Cuatro semanas de mediciones contra la API de UXP de Premiere —del 14 de agosto al 11 de
+septiembre de 2026, 233 commits— ordenadas por lo que enseñan. **Casi todo lo que está acá
+se pagó con un crash, con material roto o con horas perdidas diagnosticando en el lugar
+equivocado.**
 
 Es una destilación de la bitácora privada con la que se construyó el bridge. Lo que se sacó
 son los nombres de clientes y de personas, y las narraciones de trabajos sin estrenar. Lo
@@ -214,7 +215,7 @@ que ésa puede crashear igual. Recién la siguiente queda protegida.
 
 ## El espaciado real es la SUMA, no la pausa
 
-Esto estuvo escrito en la unidad equivocada durante meses. El panel tiene un `MS_POLL`, así
+Esto estuvo escrito en la unidad equivocada durante semanas. El panel tiene un `MS_POLL`, así
 que **cada llamada cuesta un latido**, y la pausa de las herramientas se suma encima. El
 espaciado REAL entre dos transacciones es `PAUSA + MS_POLL`.
 
@@ -480,7 +481,7 @@ ahí, visible en el panel.
 castellano esto no es un caso borde: es la mitad del material. Y el diagnóstico costó una
 hipótesis equivocada —se culpó a la COMA del nombre— hasta mirar los bytes.
 
-Corolario cobrado meses después: una comparación de rutas en otra herramienta **no tenía**
+Corolario cobrado semanas después: una comparación de rutas en otra herramienta **no tenía**
 aplicado el helper de normalización, y rechazaba un armado correcto imprimiendo dos líneas
 idénticas en pantalla. **Una regla implementada en un lugar no se aplica sola al de al
 lado.**
