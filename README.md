@@ -1032,3 +1032,10 @@ chequeada, y para eso está `sincro.py` sobre el audio.
 La distancia de los señuelos también se midió en vez de elegirla: empezaron a ±15s y así **un tercio
 de los planos quedaba sin cotejar** porque el material es más corto. El pedido gana desde **+0,5s**
 (5 de 5), así que se usan ±3s como los más cercanos, donde el peor margen es x1,25.
+
+---
+
+## Licencia
+
+MIT — ver [`LICENSE`](LICENSE). Usalo como quieras, incluso en algo comercial; lo
+unico que pide es que mantengas el aviso de copyright.
