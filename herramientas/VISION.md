@@ -44,9 +44,9 @@ material de un videoclip:
 
 | par | similitud | qué es de verdad |
 |---|---|---|
-| 3581 / 3582 | **0,976** | el mismo plano general de el otro interprete pescando, misma cámara |
+| 3581 / 3582 | **0,976** | el mismo plano general del otro interprete pescando, misma cámara |
 | 3583 / 3585 | **0,963** | el mismo plano cerrado, con el sauce |
-| 3573 / 3577 | 0,826 | mismo armado de un videoclip con la guitarra, distinto tamaño |
+| 3573 / 3577 | 0,826 | mismo armado con la guitarra, distinto tamaño |
 | 3572 / 3574 | 0,548 | mismo lugar, encuadres completamente distintos |
 
 **Los cuatro coinciden con lo que se ve en la plancha.** Esa comprobación no es un detalle
@@ -286,7 +286,7 @@ a un caso — el mismo error que transferir el umbral de z entre regímenes en `
 
 Así que con resoluciones distintas **no se compara**: se informa la diferencia y se dice que no es
 comparable, nombrando las dos resoluciones. Verificado por las dos ramas — la familia mezclada se
-niega, y una familia de un videoclip entera en 3840x2160 sigue comparando igual que antes.
+niega, y una familia entera en 3840x2160 sigue comparando igual que antes.
 
 ## Y antes de mirar el contenido: el material trae defectos que Premiere obedece en silencio
 
@@ -439,8 +439,7 @@ error predicho en los in-points del corte    5 planos > 0,5s, el peor 3,12s
 
 Un fragmento 3,12s corrido dice otras palabras. Valía medirlo.
 
-**La medición, en VIDEO 3 de un corporativo.** Clip `WhatsApp Video 2026-08-05 at 10.08.20.mp4`, que
-declara 30fps y promedia 28,33, con `entrada` 100,84 leída **en vivo** del timeline. Playhead a
+**La medición, en VIDEO 3 de un corporativo.** Un clip de WhatsApp, que declara 30fps y promedia 28,33, con `entrada` 100,84 leída **en vivo** del timeline. Playhead a
 2,00s del clip, o sea tiempo de fuente 102,840s bajo el modelo PTS y 101,951s bajo el conform
 fijo — dos momentos con RMSE 29,46 entre sí, o sea contenido completamente distinto, así que el
 clip podía distinguir.

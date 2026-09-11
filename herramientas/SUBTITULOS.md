@@ -1,6 +1,6 @@
 # Subtítulos: el proceso completo, con las cinco trampas que costaron
 
-Hecho para el videoclip de un videoclip el 2026-08-21. **Ninguna parte de esto es obvia** y cada
+Hecho para un videoclip el 2026-08-21. **Ninguna parte de esto es obvia** y cada
 paso tiene un modo de fallar en silencio.
 
 ## Lo que NO se puede hacer, medido
@@ -41,7 +41,7 @@ palabras— y se camina la letra buscando cada palabra en orden. Normalizando ac
 puntuación. Resultado: **23 de 23 líneas alineadas, 0 problemas de orden.**
 
 La validación de que la alineación es real vino de afuera: *"extiende sus alas"* cayó en
-160,95–166,94 y el plano de un videoclip levantando los brazos está en 162. El usuario había marcado
+160,95–166,94 y el plano del cantante levantando los brazos está en 162. El usuario había marcado
 esa coincidencia como algo que le gustaba **antes** de que existieran los subtítulos.
 
 ## 1.b Las PRIMERAS líneas de cada sección no estaban medidas (2026-08-21)

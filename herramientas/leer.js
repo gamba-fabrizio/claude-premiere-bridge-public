@@ -1,6 +1,6 @@
 /* Lee las transcripciones de la tanda y prepara lo que hace falta para armar los
  * videos a ciegas: el texto de cada clip de locución, y las TOMAS REPETIDAS
- * dentro de cada uno — que según Fabrizio se resuelven quedándose con la última. */
+ * dentro de cada uno — que según el editor se resuelven quedándose con la última. */
 const fs = require("fs");
 const path = require("path");
 const D = process.env.PROYECTO_CN || process.cwd();
