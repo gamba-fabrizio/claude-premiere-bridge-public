@@ -92,7 +92,127 @@ async function asegurarCarpeta() {
  * contesta a tiempo, o si contestó con un error — y en los tres casos el mensaje
  * dice QUÉ SE ENCONTRÓ, porque un "falló" pelado no se puede diagnosticar.
  */
+/*
+ * PREVUELO: lo que hay que comprobar EN EL DISCO antes de mandar el comando (2026-09-11).
+ *
+ * El panel NO PUEDE leer el disco —esta medido— asi que cualquier comprobacion de rutas
+ * tiene que pasar de este lado. Y tiene que pasar ACA, en el transporte, y no en
+ * `server/index.js`: las herramientas del repo usan el transporte DIRECTO y saltean las
+ * herramientas MCP. Una guarda que solo vive en el despachador es una guarda que no esta
+ * cuando la llama un script, que es exactamente como se pago esto.
+ *
+ * EL CASO QUE LO ORIGINO. `crearProyecto` con una ruta cuya CARPETA PADRE no existe no
+ * falla: Premiere trunca la ruta y crea el proyecto un nivel mas arriba, con el nombre de
+ * la carpeta que falta y SIN extension. Medido el 2026-09-11:
+ *
+ *   pedido  .../Proyectos/_CARPETA NUEVA/PROYECTO - BORRAR.prproj
+ *   quedo   .../Proyectos/_CARPETA NUEVA          <- un gzip suelto, sin .prproj
+ *
+ * Y el verbo informa "CREO via createProject(ruta)" porque el proyecto activo SI cambio.
+ * Es el modo de fallar numero 1 del CLAUDE.md: la API devuelve exito y hace otra cosa.
+ * Ademas deja el proyecto viviendo suelto en la carpeta de proyectos, y con los scratch
+ * en "Same as Project" eso saca un error de disco de rayado que no nombra la causa.
+ *
+ * El chequeo que ya existia en `index.js` mira el disco DESPUES de crear: informa el
+ * daño, no lo evita.
+ */
+const PREVUELO = {
+  /*
+   * El panel NO VE EL DISCO. Relinkear a una ruta que no existe deja el medio apuntando a la
+   * nada: Premiere lo marca offline recien al reproducir, y eso se lee como un problema del
+   * archivo original. La comprobacion tiene que estar de este lado, y ANTES de mandar nada.
+   */
+  relink: (p) => {
+    const fsx = require("fs");
+    if (typeof p.ruta !== "string" || !p.ruta.trim()) return null;   /* lo rebota el verbo */
+    if (!fsx.existsSync(p.ruta)) {
+      return `"relink": el archivo "${p.ruta}" NO EXISTE en disco. Repuntar un medio a una ruta ` +
+        `que no esta lo deja offline y Premiere recien lo avisa al reproducir. NO se ejecuto nada.`;
+    }
+    let st = null; try { st = fsx.statSync(p.ruta); } catch (e) { st = null; }
+    if (st && st.isDirectory()) {
+      return `"relink": "${p.ruta}" es una CARPETA, no un archivo. NO se ejecuto nada.`;
+    }
+    return null;
+  },
+  crearProyecto: (p) => {
+    if (!p || typeof p.ruta !== "string" || !p.ruta.trim()) return null;   /* lo rebota el verbo */
+    const fsx = require("fs"), px = require("path");
+    const carpeta = px.dirname(p.ruta);
+    let st = null;
+    try { st = fsx.statSync(carpeta); } catch (e) { st = null; }
+    if (!st || !st.isDirectory()) {
+      return `"crearProyecto": la carpeta "${carpeta}" NO EXISTE, y Premiere NO falla por eso: ` +
+        "trunca la ruta y crea el proyecto un nivel mas arriba, con el nombre de la carpeta " +
+        "que falta y sin extension — despues informa que lo creo. Crea la carpeta primero. " +
+        "NO se ejecuto nada.";
+    }
+    if (fsx.existsSync(p.ruta)) {
+      return `"crearProyecto": ya existe un archivo en "${p.ruta}". NO se ejecuto nada: ` +
+        "elegi otro nombre o borralo vos, para que no haya dudas de cual se piso.";
+    }
+    return null;
+  },
+};
+
+/*
+ * LA TRABA DEL REINICIO A MEDIAS (2026-09-11)
+ *
+ * El cartel de "guardar antes de cerrar" BLOQUEA el Cmd+Q y deja a Premiere a medio cerrar,
+ * con el proyecto en el limbo. Y lo que lo vuelve peligroso de verdad: EL PANEL SIGUE
+ * LATIENDO Y CONTESTANDO. Medido el 2026-09-11 — con el modal arriba, `estado` respondio
+ * normal. Asi que desde este lado no se nota NADA y se sigue trabajando sobre un Premiere
+ * que no esta sano, que es exactamente lo que paso: se borro una carpeta de proyecto
+ * creyendo que ya estaba cerrado.
+ *
+ * `recargar.js` deja esta marca cuando pide el cierre y Premiere NO se va, y la borra cuando
+ * el reinicio sale bien. Mientras exista, el transporte NO MANDA NADA. Es preferible que
+ * TODO rebote con un mensaje claro a seguir escribiendo a ciegas: un cuelgue se nota, una
+ * escritura sobre el proyecto equivocado no.
+ *
+ * Va en el TRANSPORTE por la misma razon que PREVUELO: las herramientas de este repo llaman
+ * por aca y saltean las herramientas MCP, asi que una guarda puesta mas arriba no las cubre.
+ */
+const MARCA_TRABA = path.join(CARPETA, "reinicio-sin-terminar.json");
+
+function leerTraba() {
+  const fsx = require("fs");
+  try { return JSON.parse(fsx.readFileSync(MARCA_TRABA, "utf8")); } catch (e) { return null; }
+}
+
+function ponerTraba(motivo) {
+  const fsx = require("fs");
+  try {
+    fsx.mkdirSync(CARPETA, { recursive: true });
+    fsx.writeFileSync(MARCA_TRABA, JSON.stringify({ cuando: new Date().toISOString(), motivo: String(motivo) }, null, 1));
+    return true;
+  } catch (e) { return false; }
+}
+
+function sacarTraba() {
+  const fsx = require("fs");
+  try { fsx.unlinkSync(MARCA_TRABA); return true; } catch (e) { return false; }
+}
+
 async function enviar(cmd, params = {}, msTimeout = MS_TIMEOUT) {
+  /* ANTES que nada, incluso antes de PREVUELO: a un Premiere a medio cerrar no se le manda
+     ni una comprobacion de parametros. */
+  const traba = leerTraba();
+  if (traba) {
+    throw new Error(
+      `TRABADO: el ultimo reinicio de Premiere NO TERMINO (${traba.cuando}).\n` +
+      `Motivo: ${traba.motivo}\n` +
+      `Lo mas probable es que haya un CARTEL abierto en Premiere —"guardar antes de cerrar"— ` +
+      `bloqueando el Cmd+Q. El panel sigue latiendo igual, asi que no se nota desde aca, y ` +
+      `seguir mandando comandos es trabajar sobre un proyecto en el limbo.\n` +
+      `Resolvé el cartel en Premiere y despues: node herramientas/recargar.js --destrabar\n` +
+      `NO se ejecutó "${cmd}".`
+    );
+  }
+  if (PREVUELO[cmd]) {
+    const problema = PREVUELO[cmd](params);
+    if (problema) throw new Error(problema);
+  }
   await asegurarCarpeta();
 
   /*
@@ -166,4 +286,4 @@ async function enviar(cmd, params = {}, msTimeout = MS_TIMEOUT) {
   );
 }
 
-module.exports = { enviar, edadDelLatido, CARPETA };
+module.exports = { enviar, edadDelLatido, CARPETA, ponerTraba, sacarTraba, leerTraba };

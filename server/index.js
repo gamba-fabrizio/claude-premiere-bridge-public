@@ -1285,6 +1285,89 @@ server.registerTool(
 );
 
 server.registerTool(
+  "premiere_relink",
+  {
+    title: "Repuntar un medio a otro archivo (relink)",
+    description:
+      "Le cambia a un medio del panel el ARCHIVO al que apunta. Sirve para reparar un proyecto cuyos " +
+      "medios se movieron o se renombraron: el clip vuelve a estar online sin tocar la edicion.\n\n" +
+      "**Es del MEDIO, no de una instancia**: afecta a TODA secuencia que lo use.\n\n" +
+      "El archivo tiene que EXISTIR: la llamada rebota antes de ejecutar nada si no esta, porque " +
+      "repuntar a una ruta ausente deja el medio offline y Premiere recien lo avisa al reproducir.\n\n" +
+      "**NO pasa por una transaccion, asi que NO hay Cmd+Z.** Se desanda repuntando a la ruta " +
+      "anterior, que el verbo informa.\n\n" +
+      "Medido de punta a punta: un proyecto abierto con el medio ausente daba `isOffline true` y " +
+      "exportaba la placa roja; despues del relink volvio a exportar identico al sano, y la " +
+      "reparacion SOBREVIVE a cerrar y reabrir.\n\n" +
+      "Ojo al detectar el problema: **un clip offline NO exporta negro**, exporta la placa " +
+      "\"Media Offline\". Lo que lo dice es `isOffline`, no mirar el cuadro. Y Premiere RELINKEA SOLO " +
+      "cuando el archivo se movio dentro del arbol del proyecto.",
+    inputSchema: {
+      secuencia: z.string().optional().describe("Guarda: si la secuencia activa no es ésta, no se ejecuta nada."),
+      proyecto: z
+        .string()
+        .optional()
+        .describe(
+          "GUARDA: nombre (o parte) del proyecto sobre el que se quiere operar. Si el que tiene "
+          + "foco en Premiere es otro, la llamada REBOTA sin ejecutar nada."
+        ),
+      medio: z.string().describe("Nombre del medio en el panel de proyecto. Coincidencia parcial."),
+      ruta: z.string().describe("Ruta absoluta del archivo al que hay que repuntarlo. Tiene que existir.")
+    }
+  },
+  async (args) => {
+    try {
+      const r = await enviar("relink", args, 300000);
+      return texto(r.resumen, r);
+    } catch (e) {
+      return fallo(e);
+    }
+  }
+);
+
+server.registerTool(
+  "premiere_clonar",
+  {
+    title: "Duplicar un clip del timeline con su trabajo",
+    description:
+      "Copia un clip a otra pista y otro momento, **con sus efectos, su Motion y su recorte**, y el " +
+      "clon queda INDEPENDIENTE: retocarlo no toca el original.\n\n" +
+      "Es lo que `premiere_agregar_efecto` y el copiado de componentes NO pueden dar: ahi la " +
+      "instancia del efecto queda COMPARTIDA entre los dos clips, y apagar el efecto en uno lo apaga " +
+      "en el otro. Probado por la inversa —escribiendo en el clon y leyendo el original— con Motion " +
+      "y con un Lumetri agregado.\n\n" +
+      "El destino se pide ABSOLUTO: `aPista` es el numero de pista (1 = V1) y `aSegundos` el momento " +
+      "en la secuencia. El tiempo se cuantiza al cuadro y el verbo dice cuanto lo movio.\n\n" +
+      "**OJO: clonar CREA pistas de video** si el destino queda por encima de las que hay, y no hay " +
+      "API para borrarlas. El verbo avisa cuando paso.\n\n" +
+      "Un Cmd+Z lo saca.",
+    inputSchema: {
+      secuencia: z.string().optional().describe("Guarda: si la secuencia activa no es ésta, no se ejecuta nada."),
+      proyecto: z
+        .string()
+        .optional()
+        .describe(
+          "GUARDA: nombre (o parte) del proyecto sobre el que se quiere operar. Si el que tiene "
+          + "foco en Premiere es otro, la llamada REBOTA sin ejecutar nada."
+        ),
+      pista: z.string().optional().describe('Pista del clip a clonar, como "V1". Con `indice`.'),
+      indice: z.number().optional().describe("Índice del clip dentro de la pista, desde 0."),
+      nombre: z.string().optional().describe("Alternativa a pista+indice: nombre del clip."),
+      aPista: z.number().describe("Pista de video destino, ABSOLUTA. 1 = V1."),
+      aSegundos: z.number().describe("Dónde va el clon, en segundos de la secuencia.")
+    }
+  },
+  async (args) => {
+    try {
+      const r = await enviar("clonar", args, 300000);
+      return texto(r.resumen, r);
+    } catch (e) {
+      return fallo(e);
+    }
+  }
+);
+
+server.registerTool(
   "premiere_subclip",
   {
     title: "Crear un subclip de un medio",

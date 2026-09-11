@@ -1359,6 +1359,303 @@ async function playhead(params) {
  * Es lo que convierte al bridge en algo con lo que se puede trabajar: sin esto
  * solo se ve el clip que el usuario tenga seleccionado.
  */
+/*
+ * El estado de SALIDA de una pista: el OJITO en video, el mute en audio. Hasta el
+ * 2026-09-11 no lo leia ningun verbo, y eso convertia un toggle de un clic en un modo
+ * de fallo silencioso completo: `clips` listaba los clips en su lugar, `revisar` decia
+ * "sin problemas", el colocador informaba "6 de 6 colocados y verificados", y el render
+ * salia NEGRO. Medido: `setMute(true)` sobre una pista de video deja el cuadro en media
+ * 0,00 y al desmutear vuelve a 89,07.
+ *
+ * Va en UN helper y no copiado en cada verbo porque `clips` ya pago esa leccion con sus
+ * dos bucles: dos caminos para la misma pregunta se separan siempre.
+ *
+ * Devuelve true / false, o un STRING con el motivo si la lectura tiro. Nunca false por
+ * defecto: asumir que se ve es asumir justo el lado que costo un cuadro negro entregado.
+ */
+async function estadoDeSalida(track) {
+  try { return await track.isMuted(); }
+  catch (e) { return "NO SE PUDO LEER (" + String((e && e.message) || e).slice(0, 40) + ")"; }
+}
+
+/*
+ * RELINK: repuntar un medio a otro archivo (2026-09-11)
+ *
+ * Medido de punta a punta sobre un proyecto armado a proposito, con el ciclo entero:
+ *
+ *   proyecto abierto con el medio AUSENTE   isOffline true  · el export dio la placa roja
+ *   changeMediaFilePath + refreshMedia      isOffline false
+ *   export despues                          IDENTICO al sano (media 124,338)
+ *   cerrar y reabrir                        sigue online: la reparacion PERSISTE
+ *
+ * Y dos cosas que salieron de medirlo y cambian como se usa:
+ *
+ *  - Un clip offline NO exporta NEGRO: exporta la placa "Media Offline", que dio media
+ *    97,83. Detectarlo preguntando "el cuadro es negro" no funciona; se pregunta `isOffline`.
+ *  - Premiere RELINKEA SOLO cuando el archivo se movio dentro del arbol del proyecto. Hizo
+ *    falta mandarlo afuera y con otro nombre para conseguir un offline de verdad.
+ *
+ * NO pasa por executeTransaction, asi que NO hay Cmd+Z: se desanda relinkeando a la ruta
+ * anterior, que por eso se informa.
+ */
+async function relink(params) {
+  const project = await getProyecto();
+  if (typeof params.medio !== "string" || !params.medio.trim()) {
+    throw new Error("Falta `medio`: el nombre del medio en el panel. Se exige objetivo explícito.");
+  }
+  if (typeof params.ruta !== "string" || !params.ruta.trim()) {
+    throw new Error("Falta `ruta`: el archivo al que hay que repuntar el medio.");
+  }
+  const item = await buscarMedio(project, params.medio);
+  if (!item) throw new Error(`No hay ningún medio que coincida con "${params.medio}".`);
+  /* CASTEAR: estos métodos viven en ClipProjectItem y `buscarMedio` devuelve un ProjectItem.
+     Sin el cast contestan "is not a function", que se lee como que la API no los tiene. */
+  let ci = null;
+  try { ci = ppro.ClipProjectItem.cast(item); } catch (e) { ci = null; }
+  if (!ci) throw new Error(`"${String(item.name)}" no se pudo castear a ClipProjectItem (¿es un bin o una secuencia?).`);
+
+  let puede = null;
+  try { puede = await ci.canChangeMediaPath(); } catch (e) { puede = "no se pudo leer: " + String((e && e.message) || e).slice(0, 40); }
+  if (puede === false) {
+    throw new Error(`"${String(item.name)}": canChangeMediaPath() dice false, así que NO se intentó. No se ejecutó nada.`);
+  }
+
+  const leer = async () => {
+    let ruta = "?", off = "?";
+    try { ruta = String(await ci.getMediaFilePath()); } catch (e) { ruta = "no se pudo leer"; }
+    try { off = await ci.isOffline(); } catch (e) { off = "no se pudo leer"; }
+    return { ruta, off };
+  };
+  const antes = await leer();
+
+  let devolvio = null, error = null;
+  try { devolvio = await ci.changeMediaFilePath(params.ruta); }
+  catch (e) { error = String((e && e.message) || e).slice(0, 90); }
+  try { await ci.refreshMedia(); } catch (e) { /* el veredicto igual sale de releer */ }
+
+  const despues = await leer();
+  const cambio = antes.ruta !== despues.ruta;
+  const reparo = antes.off === true && despues.off === false;
+
+  return {
+    resumen:
+      `"${String(item.name)}": ${cambio ? "REPUNTADO" : "NO CAMBIÓ LA RUTA"}` +
+      ` · ${antes.ruta} → ${despues.ruta}` +
+      ` · offline ${antes.off} → ${despues.off}` +
+      (reparo ? " · REPARADO: estaba offline y ahora no" : "") +
+      (error ? ` · changeMediaFilePath TIRÓ: ${error}` : ` · devolvió ${devolvio}`) +
+      " · NO pasa por executeTransaction: NO hay Cmd+Z, se desanda repuntando a la ruta anterior" +
+      " · es del MEDIO, así que afecta a TODA secuencia que lo use",
+    cambio: cambio, reparo: reparo,
+    rutaAntes: antes.ruta, rutaDespues: despues.ruta,
+    offlineAntes: antes.off, offlineDespues: despues.off,
+  };
+}
+
+/*
+ * CLONAR un clip del timeline, con su trabajo, a otro lugar (2026-09-11)
+ *
+ * Es la copia que `copiarEfecto` NO puede dar: ese COMPARTE la instancia —el editor apago un
+ * efecto en la secuencia nueva y se le apago en su montaje— y este da una copia de verdad.
+ * Probado por la INVERSA, que es lo unico que distingue copia de vinculo: escribiendo en el
+ * CLON, el original no se movio. Con `Motion` y con un `Lumetri` agregado.
+ *
+ * LA TRAMPA DE LA FIRMA, y por eso este verbo existe en vez de exponer el metodo crudo:
+ * `createCloneTrackItemAction` toma OFFSETS relativos al clip origen, no posiciones. Pedir
+ * "tick 40" sobre un clip que arranca en 2,52 deja el clon en 42,52, y el argumento de pista
+ * se SUMA al indice de origen. El verbo recibe el destino ABSOLUTO y hace la resta.
+ */
+async function clonar(params) {
+  const { project, sequence } = await getProyectoYSecuencia();
+  const ubic = await ubicarClip(sequence, params);
+  if (!ubic || !ubic.clip) throw new Error("No se ubicó el clip. Pedilo con `pista` + `indice` o con `nombre`.");
+  if (ubic.esAudio) throw new Error(`"${ubic.nombre}" está en ${ubic.pista}: clonar está medido sobre clips de VIDEO, no de audio.`);
+  if (typeof params.aPista !== "number") throw new Error("Falta `aPista`: el número de pista de video destino (1 = V1).");
+  if (typeof params.aSegundos !== "number") throw new Error("Falta `aSegundos`: dónde va el clon, en segundos de la secuencia.");
+
+  const cuantasV = await sequence.getVideoTrackCount();
+  const destIdx = params.aPista - 1;
+  if (destIdx < 0) throw new Error(`\`aPista\` es ${params.aPista}; la primera es 1.`);
+  const origenIdx = Number(String(ubic.pista).replace(/^V/i, "")) - 1;
+
+  /* Al cuadro, como `marcar`: la API acepta sub-frame y un clip entre frames deja huecos de
+     medio cuadro que `revisar` informa y que nadie pidió. */
+  let tb = null;
+  try { tb = Number(await sequence.getTimebase()); } catch (e) { tb = null; }
+  let segDestino = params.aSegundos, cuantizado = "no se pudo cuantizar";
+  if (isFinite(tb) && tb > 0) {
+    const ticks = Math.round(params.aSegundos * TICKS_POR_SEGUNDO);
+    const ali = Math.round(ticks / tb) * tb;
+    segDestino = ali / TICKS_POR_SEGUNDO;
+    cuantizado = Math.abs(segDestino - params.aSegundos) < 1e-9
+      ? "ya caía en cuadro"
+      : `movido ${((segDestino - params.aSegundos) * 1000).toFixed(1)}ms al cuadro`;
+  }
+
+  const t4 = await tiemposDe(ubic.clip);
+  const track = await sequence.getVideoTrack(destIdx);
+  const contar = async () => track
+    ? (await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false)).length
+    : 0;
+  const antes = track ? await contar() : 0;
+
+  const ed = await ppro.SequenceEditor.getEditor(sequence);
+  let ok = false, error = null;
+  try {
+    project.lockedAccess(() => {
+      const acc = ed.createCloneTrackItemAction(
+        ubic.clip,
+        aTick(segDestino - t4.desde),      /* OFFSET de tiempo, no posición */
+        destIdx - origenIdx,               /* OFFSET de pista, no índice */
+        0
+      );
+      ok = project.executeTransaction((a) => { a.addAction(acc); }, "clonar clip");
+    });
+  } catch (e) { error = String((e && e.message) || e).slice(0, 90); }
+
+  /* EL VEREDICTO SALE DE RELEER LA PISTA DESTINO. `executeTransaction` devolvió true sobre
+     clones que no habían entrado, y contar la pista equivocada informó "NO CLONÓ" sobre tres
+     que sí: el contador ciego de este archivo, pagado en esta misma medición. */
+  const trackDespues = await sequence.getVideoTrack(destIdx);
+  let despues = 0, quedo = null;
+  if (trackDespues) {
+    const items = await trackDespues.getTrackItems(ppro.Constants.TrackItemType.CLIP, false);
+    despues = items.length;
+    for (let i = 0; i < items.length; i++) {
+      const t = await tiemposDe(items[i]);
+      if (Math.abs(t.desde - segDestino) < 0.05) { quedo = { indice: i, desde: t.desde, hasta: t.hasta }; break; }
+    }
+  }
+  const cuantasDespues = await sequence.getVideoTrackCount();
+
+  return {
+    resumen:
+      (quedo
+        ? `CLONADO "${ubic.nombre}" de ${ubic.pista}[${ubic.indice}] a V${params.aPista}[${quedo.indice}] ${quedo.desde}–${quedo.hasta}s`
+        : `NO SE CLONÓ "${ubic.nombre}" (la pista destino sigue con ${despues} clip(s)); transacción ${ok}`) +
+      ` · tiempo: ${cuantizado}` +
+      (error ? ` · TIRÓ: ${error}` : "") +
+      (cuantasDespues > cuantasV ? ` · OJO: la secuencia pasó de ${cuantasV} a ${cuantasDespues} pistas de video — clonar las CREA y no hay API para borrarlas` : "") +
+      " · el clon es INDEPENDIENTE: sus efectos se retocan sin tocar el original" +
+      " · UN Cmd+Z lo saca",
+    clono: !!quedo, quedo: quedo,
+    pistasAntes: cuantasV, pistasDespues: cuantasDespues,
+  };
+}
+
+async function proyectosAbiertos(params) {
+  const guardarEstas = Array.isArray(params.guardar) ? params.guardar.map(String) : [];
+  let ids = [];
+  try { ids = await ppro.ProjectUtils.getProjectViewIds(); } catch (e) { ids = []; }
+  const lista = [];
+  for (const id of ids) {
+    let p = null;
+    try { p = await ppro.ProjectUtils.getProjectFromViewId(id); } catch (e) { p = null; }
+    if (!p) { lista.push({ viewId: String(id), nombre: null, ruta: null, error: "no se pudo traer" }); continue; }
+    const fila = { viewId: String(id), nombre: String(p.name), ruta: String(p.path || "") };
+    /*
+     * `guardar` es una LISTA DE RUTAS, no un booleano, y esa firma ES el arreglo de un bug
+     * que ya mordio el 2026-09-11: la primera version guardaba "todos los que tuvieran
+     * ruta", y una ruta cuyo ARCHIVO fue borrado sigue siendo una ruta. Premiere abrio
+     * "Project Modified — The project file has been modified since last save" al intentar
+     * guardar ahi, que es EXACTAMENTE el modal que todo esto existe para evitar.
+     *
+     * Quien puede guardarse lo decide el que VE EL DISCO, y eso es el servidor. El panel no
+     * ve el disco, asi que no tiene con que decidirlo y no debe intentarlo.
+     */
+    if (guardarEstas.length && fila.ruta && guardarEstas.indexOf(fila.ruta) !== -1) {
+      try { await p.save(); fila.guardado = "sí"; }
+      catch (e) { fila.guardado = "FALLÓ: " + String((e && e.message) || e).slice(0, 60); }
+    }
+    lista.push(fila);
+  }
+  return {
+    resumen: `${lista.length} proyecto(s) abierto(s): ` +
+      lista.map((x) => `"${x.nombre}"${x.guardado ? " [guardado: " + x.guardado + "]" : ""}`).join(" · "),
+    proyectos: lista,
+  };
+}
+
+/*
+ * Cerrar un proyecto SIN que aparezca el cartel. `CloseProjectOptions.setPromptIfDirty(false)`
+ * está medido el 2026-09-11: cierra sin preguntar y DESCARTA los cambios en silencio.
+ *
+ * Por eso el default es GUARDAR antes de cerrar, y descartar hay que PEDIRLO. Perder trabajo
+ * para que una automatización no se trabe es el intercambio equivocado — y este archivo ya
+ * tiene escrito que `close()` es "la clase de acción de la que no se vuelve".
+ *
+ * El parámetro se llama `cual` y NO `proyecto` a propósito: `proyecto` es la GUARDA del
+ * despachador, que exige que el proyecto con foco sea ese. Acá hay que poder cerrar uno que
+ * NO tiene el foco, que es justamente el caso que traba el Cmd+Q.
+ */
+async function cerrarProyecto(params) {
+  if (typeof params.cual !== "string" || !params.cual.trim()) {
+    throw new Error("Falta `cual`: el nombre (o parte) del proyecto a cerrar. Se exige objetivo explícito.");
+  }
+  let ids = [];
+  try { ids = await ppro.ProjectUtils.getProjectViewIds(); } catch (e) { ids = []; }
+  const abiertos = [];
+  for (const id of ids) {
+    try { const p = await ppro.ProjectUtils.getProjectFromViewId(id); if (p) abiertos.push(p); } catch (e) { /* sigo */ }
+  }
+  if (abiertos.length <= 1) {
+    throw new Error(`Hay ${abiertos.length} proyecto(s) abierto(s): cerrar el último dejaría Premiere sin ninguno ` +
+      `y los verbos que piden proyecto empezarían a fallar. NO se cerró nada.`);
+  }
+  const buscado = params.cual.toLowerCase();
+  const candidatos = abiertos.filter((p) => String(p.name).toLowerCase().indexOf(buscado) !== -1);
+  if (candidatos.length === 0) {
+    throw new Error(`Ningún proyecto abierto coincide con "${params.cual}". Están: ` +
+      abiertos.map((p) => `"${String(p.name)}"`).join(", ") + ". NO se cerró nada.");
+  }
+  if (candidatos.length > 1) {
+    /* Ante ambigüedad no se adivina: es la misma regla de `moverKeyframe` y del emparejado
+       de proxies, y acá cerrar el equivocado puede tirar trabajo sin guardar. */
+    throw new Error(`"${params.cual}" coincide con ${candidatos.length}: ` +
+      candidatos.map((p) => `"${String(p.name)}"`).join(", ") + ". Sé más específico. NO se cerró nada.");
+  }
+  const objetivo = candidatos[0];
+  const nombre = String(objetivo.name);
+  const ruta = String(objetivo.path || "");
+
+  let guardado = "no se pidió";
+  if (params.descartar !== true) {
+    try { await objetivo.save(); guardado = "sí"; }
+    catch (e) {
+      throw new Error(`No se pudo GUARDAR "${nombre}" antes de cerrarlo (${String((e && e.message) || e).slice(0, 60)}), ` +
+        `así que NO se cerró: cerrarlo ahora perdería los cambios. Si es descartable, pedilo con \`descartar: true\`.`);
+    }
+  }
+
+  const opciones = new ppro.CloseProjectOptions();
+  const puestas = [];
+  for (const [m, etq] of [["setPromptIfDirty", "no preguntar"], ["setShowCancelButton", "sin cancelar"]]) {
+    if (typeof opciones[m] === "function") { opciones[m](false); puestas.push(etq); }
+  }
+  let ok = false, error = null;
+  try { ok = await objetivo.close(opciones); }
+  catch (e) { error = String((e && e.message) || e).slice(0, 90); }
+
+  /* El veredicto sale del ESTADO: que close() devuelva true no prueba que se haya cerrado. */
+  let quedan = [];
+  try {
+    const ids2 = await ppro.ProjectUtils.getProjectViewIds();
+    for (const id of ids2) {
+      try { const p = await ppro.ProjectUtils.getProjectFromViewId(id); if (p) quedan.push(String(p.name)); } catch (e) { /* sigo */ }
+    }
+  } catch (e) { quedan = ["(no se pudo releer)"]; }
+  const cerro = quedan.indexOf(nombre) === -1;
+
+  return {
+    resumen: `"${nombre}" ${cerro ? "CERRADO" : "NO SE CERRÓ"} · guardado antes: ${guardado}` +
+      (params.descartar === true ? " · se pidió DESCARTAR los cambios" : "") +
+      ` · close() devolvió ${ok}` + (error ? ` · TIRÓ: ${error}` : "") +
+      ` · opciones: ${puestas.join(", ") || "ninguna"}` +
+      ` · quedan ${quedan.length}: ${quedan.join(", ")}`,
+    cerro: cerro, nombre: nombre, ruta: ruta, quedan: quedan,
+  };
+}
+
 async function clips(params) {
   const { sequence } = await getProyectoYSecuencia();
 
@@ -1389,13 +1686,17 @@ async function clips(params) {
   }
 
   const salida = [];
+  const apagadas = [];
   for (const g of grupos) {
     for (let t = 0; t < g.cuantas; t++) {
       const etiqueta = g.letra + (t + 1);
       if (pedida && etiqueta !== pedida) continue;
       const track = await g.traer(t);
       if (!track) continue;
+      /* UNA lectura por PISTA, no por clip, y el `track` ya esta en la mano. */
+      const apagada = await estadoDeSalida(track);
       const items = await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false);
+      if (items.length && apagada !== false) apagadas.push(avisoDeSalida(etiqueta, apagada, items.length));
       for (let i = 0; i < items.length; i++) {
         const t4 = await tiemposDe(items[i]);
         salida.push({
@@ -1418,7 +1719,8 @@ async function clips(params) {
            * resto sin corregir. Medido y mirado en un frame el 2026-08-16.
            * Sin este dato no hay forma de distinguirla de un clip común.
            */
-          esCapaDeAjuste: await esCapaDeAjuste(items[i])
+          esCapaDeAjuste: await esCapaDeAjuste(items[i]),
+          pistaApagada: apagada
         });
       }
     }
@@ -1426,11 +1728,15 @@ async function clips(params) {
 
   return {
     resumen:
-      salida.length === 0
+      (salida.length === 0
         ? `Sin clips en ${pedida || `"${sequence.name}"`}.`
         : `${salida.length} clips en ${pedida || `"${sequence.name}"`} · ` +
-          salida.map((c) => `${c.pista}[${c.indice}] "${c.nombre}" ${c.desde}-${c.hasta}s`).join(" · "),
-    clips: salida
+          salida.map((c) => `${c.pista}[${c.indice}] "${c.nombre}" ${c.desde}-${c.hasta}s`).join(" · ")) +
+      /* En el RESUMEN y no solo en el dato: un dato que esta en la respuesta y no en el
+         resumen es un dato que no esta, y este es el que evita entregar un cuadro negro. */
+      (apagadas.length ? ` · OJO: ${apagadas.join(" · ")}` : ""),
+    clips: salida,
+    pistasApagadas: apagadas
   };
 }
 
@@ -7692,6 +7998,7 @@ async function revisar(params) {
   const pedido = params.pista ? String(params.pista).toUpperCase() : null;
 
   const pistas = [];
+  const apagadas = [];
   let ceros = 0, solapes = 0, huecosChicos = 0, huecosGrandes = 0, juntas = 0, deliberados = 0;
 
   for (const g of grupos) {
@@ -7702,6 +8009,14 @@ async function revisar(params) {
       if (!track) continue;
       const items = await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false);
       if (!items.length) continue;
+
+      /*
+       * `revisar` es el chequeo de AFUERA, y ESTE es literalmente el caso que lo hacia
+       * contestar "sin problemas" sobre un render negro: los clips estaban en su lugar,
+       * con su duracion, sin huecos ni solapes, y la pista no sacaba imagen.
+       */
+      const apagada = await estadoDeSalida(track);
+      if (apagada !== false) apagadas.push(avisoDeSalida(etiqueta, apagada, items.length));
 
       const l = [];
       for (let i = 0; i < items.length; i++) {
@@ -7784,6 +8099,10 @@ async function revisar(params) {
   }
 
   const partes = [];
+  /* Va PRIMERO: una pista sin salida INVALIDA todo lo demas que este verbo pueda informar
+     —los clips pueden estar perfectos y no verse— y mientras esto no estuviera en `partes`,
+     `revisar` imprimia "sin problemas" sobre un render negro. */
+  if (apagadas.length) partes.push(`${apagadas.length} pista(s) SIN SALIDA: ${apagadas.join(" · ")}`);
   if (ceros) partes.push(`${ceros} clip(s) de DURACIÓN CERO`);
   if (solapes) partes.push(`${solapes} solape(s)`);
   if (huecosChicos) partes.push(`${huecosChicos} hueco(s) de hasta ${topeFrames} frame(s)`);
@@ -7813,6 +8132,7 @@ async function revisar(params) {
     secuencia: sequence.name,
     ticksPorFrame: tpf,
     topeFrames: topeFrames,
+    pistasApagadas: apagadas,
     ceros: ceros, solapes: solapes,
     huecosChicos: huecosChicos, huecosGrandes: huecosGrandes,
     juntasRemovibles: juntas,
@@ -10259,7 +10579,7 @@ async function colocarLote(params) {
   };
 }
 
-const VERBOS = { colocarLote, abrirProyecto, crearProyecto, copiarEfecto, quitarEfecto, borrarKeyframe, moverKeyframe, curvaKeyframe, leerParam, sondaParam, radiografia, desactivar, estado, guardar, bins, exportar, cortesDeEscena, etiquetar, interpretar, proxy, subclip, renombrarPista, renombrar, revisar, importar, importarTranscripcion, motion, keyframe, frame, playhead, clips, seleccionar, efectos, param, editar, catalogo, agregarEfecto, medios, insertar, secuencias, borrar, transcripcion, armarSecuencia, borrarSecuencia, vistazo, mirarMedio, analizar, marcadores, marcar, desmarcar, cortar, sacarRangos, cerrarHuecos, resolucion, ajustarAlCuadro, escalaFija, fijar, unirAudio, aplicarEscalas, aplicarZooms, leerEscalas, aplicarAnim, unirVideo, duplicarSecuencia, api };
+const VERBOS = { relink, clonar, proyectosAbiertos, cerrarProyecto, colocarLote, abrirProyecto, crearProyecto, copiarEfecto, quitarEfecto, borrarKeyframe, moverKeyframe, curvaKeyframe, leerParam, sondaParam, radiografia, desactivar, estado, guardar, bins, exportar, cortesDeEscena, etiquetar, interpretar, proxy, subclip, renombrarPista, renombrar, revisar, importar, importarTranscripcion, motion, keyframe, frame, playhead, clips, seleccionar, efectos, param, editar, catalogo, agregarEfecto, medios, insertar, secuencias, borrar, transcripcion, armarSecuencia, borrarSecuencia, vistazo, mirarMedio, analizar, marcadores, marcar, desmarcar, cortar, sacarRangos, cerrarHuecos, resolucion, ajustarAlCuadro, escalaFija, fijar, unirAudio, aplicarEscalas, aplicarZooms, leerEscalas, aplicarAnim, unirVideo, duplicarSecuencia, api };
 
 
 /*
@@ -10294,6 +10614,10 @@ const PARAMS_DE = {
   sondaParam: ["efecto", "indice", "indiceParam", "metodos", "nombre", "pista"],
   radiografia: ["conParams", "desdeIndice", "limite", "maxParams", "pista"],
   desactivar: ["activar", "indice", "nombre", "pista", "vinculados"],
+  relink: ["medio", "ruta"],
+  clonar: ["aPista", "aSegundos", "indice", "nombre", "pista"],
+  proyectosAbiertos: ["guardar"],
+  cerrarProyecto: ["cual", "descartar"],
   estado: [],
   guardar: [],
   bins: ["aunqueTengaCosas", "bin", "borrar", "medios"],

@@ -38,8 +38,9 @@ const SOLO_MIRAR = args.indexOf("--mirar") !== -1;
  * terminacion por señal.
  */
 const REINICIAR = args.indexOf("--reiniciar") !== -1;
+const DESTRABAR = args.indexOf("--destrabar") !== -1;
 const MACRO_CERRAR = "Cerrar Premiere";
-const MACRO = args.filter((a) => a !== "--mirar" && a !== "--reiniciar")[0] || "Reload Bridge";
+const MACRO = args.filter((a) => a !== "--mirar" && a !== "--reiniciar" && a !== "--destrabar")[0] || "Reload Bridge";
 /* Y el macro para CARGARLO de cero, que no es el mismo: en UDT el boton dice `Load` cuando el
  * plugin no esta corriendo y `Reload` cuando si. Los macros clickean POR IMAGEN, asi que
  * disparar "Reload Bridge" con el panel muerto no encuentra nada y falla en silencio —
@@ -170,7 +171,63 @@ const leerLatido = () => {
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function reiniciarPremiere() {
-  const { enviar } = require(path.join(RAIZ, "server", "bridge.js"));
+  const { enviar, ponerTraba, sacarTraba } = require(path.join(RAIZ, "server", "bridge.js"));
+  /*
+   * PRIMERO todos los proyectos abiertos, no solo el del foco.
+   *
+   * `guardar` guarda el que TIENE FOCO, y eso alcanzaba mientras hubiera uno solo. Con dos
+   * abiertos, el Cmd+Q saca el cartel de "guardar antes de cerrar" DEL OTRO, ese cartel
+   * BLOQUEA el quit, y esta herramienta se cuelga los 45s y termina informando que el macro
+   * no anduvo — el informe equivocado que este repo ya pago tres veces con otras causas.
+   * Paso el 2026-09-11 con un proyecto descartable abierto al lado del bueno.
+   *
+   * Los que tienen archivo se GUARDAN. Los HUERFANOS —sin ruta, o con la ruta ya borrada—
+   * no se pueden guardar y son exactamente los que van a sacar el cartel, asi que se cierran
+   * descartando. Que el archivo exista en disco lo mira ESTE lado: el panel no ve el disco.
+   */
+  try {
+    /*
+     * EL ORDEN ES EL ARREGLO, y esta invertido respecto de la primera version.
+     *
+     * Aquella pedia "guarda todos" y DESPUES cerraba los huerfanos. Pero un proyecto cuyo
+     * archivo fue borrado sigue teniendo RUTA, asi que entraba en el guardado y Premiere
+     * abria "Project Modified" — el modal que todo esto existe para evitar, producido por
+     * el propio arreglo. Verificado el 2026-09-11 con un descartable sin archivo.
+     *
+     * Ahora: se LEE la lista, el que ve el disco (este lado) separa los huerfanos, se los
+     * CIERRA descartando, y recien entonces se pide guardar, nombrando las rutas una por una.
+     */
+    const pa = await enviar("proyectosAbiertos", {}, 120000);
+    const abiertos = pa.proyectos || [];
+    if (abiertos.length > 1) console.log(`  ${abiertos.length} proyectos abiertos`);
+
+    const huerfanos = abiertos.filter((x) => !x.ruta || !fs.existsSync(x.ruta));
+    for (const h of huerfanos) {
+      try {
+        const c = await enviar("cerrarProyecto", { cual: h.nombre, descartar: true }, 120000);
+        console.log(`  "${h.nombre}" no tiene archivo en disco -> ${c.cerro ? "CERRADO descartando" : "NO se pudo cerrar"}`);
+      } catch (e) {
+        console.error(`  huerfano "${h.nombre}": no se pudo cerrar (${String(e.message).split("\n")[0].slice(0, 90)})`);
+        console.error("  el Cmd+Q probablemente se trabe con su cartel de guardar.");
+      }
+    }
+
+    /* Y RECIEN AHORA guardar, y solo los que de verdad tienen archivo. */
+    const guardables = abiertos.filter((x) => x.ruta && fs.existsSync(x.ruta)).map((x) => x.ruta);
+    if (guardables.length) {
+      const g = await enviar("proyectosAbiertos", { guardar: guardables }, 300000);
+      const fallaron = (g.proyectos || []).filter((x) => x.guardado && x.guardado !== "sí");
+      if (fallaron.length) {
+        console.error(`  OJO: no se pudieron guardar: ${fallaron.map((x) => `"${x.nombre}" (${x.guardado})`).join(", ")}`);
+      } else if (guardables.length > 1) {
+        console.log(`  guardados los ${guardables.length} que tienen archivo`);
+      }
+    }
+  } catch (e) {
+    console.error(`  no pude preparar los proyectos abiertos: ${String(e.message).split("\n")[0].slice(0, 90)}`);
+    console.error("  sigo, pero si hay otro proyecto sucio el Cmd+Q se va a trabar.");
+  }
+
   /* La ruta sale de `guardar`, que ademas GUARDA: es lo unico que hace que cerrar sea gratis. */
   let ruta = null;
   try {
@@ -203,6 +260,21 @@ async function reiniciarPremiere() {
     console.error(`  Premiere SIGUE ABIERTO tras 60s. Puede haber un diálogo esperando en pantalla,`);
     console.error(`  o el macro "${MACRO_CERRAR}" no existe / está deshabilitado. NO lo fuerzo con pkill:`);
     console.error("  eso le deja a Premiere un dump de terminación anormal y al usuario un diálogo de crash.");
+    /*
+     * Y ADEMAS SE TRABA EL TRANSPORTE. Esto es lo que faltaba el 2026-09-11: el cierre fallo,
+     * el cartel quedo en pantalla —posiblemente en otro monitor—, EL PANEL SIGUIO LATIENDO Y
+     * CONTESTANDO, y se siguio trabajando sobre un Premiere a medio cerrar hasta borrar la
+     * carpeta de un proyecto que todavia estaba abierto.
+     *
+     * Informar no alcanzaba: el informe se lee y se sigue igual. La traba hace que TODA
+     * llamada siguiente rebote hasta que alguien mire la pantalla.
+     */
+    const puesta = ponerTraba(
+      `se pidio cerrar Premiere y a los 60s seguia abierto. Proyecto en reinicio: ${ruta}`);
+    console.error(puesta
+      ? "  TRANSPORTE TRABADO: toda llamada al bridge va a rebotar hasta que resuelvas el cartel\n" +
+        "  en Premiere y corras:  node herramientas/recargar.js --destrabar"
+      : "  (no se pudo dejar la marca de traba, ojo)");
     return false;
   }
 
@@ -256,6 +328,17 @@ async function reiniciarPremiere() {
 }
 
 (async () => {
+  if (DESTRABAR) {
+    /* Se levanta A MANO y a proposito: la traba existe porque alguien tiene que MIRAR la
+       pantalla, y levantarla sola por tiempo seria devolver el problema al punto de partida. */
+    const { sacarTraba, leerTraba } = require(path.join(RAIZ, "server", "bridge.js"));
+    const habia = leerTraba();
+    if (!habia) { console.log("  no habia ninguna traba puesta."); process.exit(0); }
+    console.log(`  traba puesta el ${habia.cuando}\n  motivo: ${habia.motivo}`);
+    console.log(sacarTraba() ? "  LEVANTADA. Asegurate de que no haya quedado ningun cartel abierto en Premiere."
+                             : "  no se pudo borrar la marca.");
+    process.exit(0);
+  }
   if (REINICIAR) {
     if (!corriendo("MacOS/Adobe Premiere Pro")) {
       console.error("  Premiere no está abierto: no hay nada que reiniciar.");

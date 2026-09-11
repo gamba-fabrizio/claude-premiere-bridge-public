@@ -140,6 +140,8 @@ claude mcp add premiere-bridge --scope user -- node /RUTA/A/TU/COPIA/premiere-br
 | `premiere_etiquetar` | Etiquetas de color en el panel de proyecto; sin `color` sólo lee |
 | `premiere_interpretar` | Lee o cambia los fps con que Premiere lee un medio; sin `fps` sólo lee |
 | `premiere_proxy` | Lee o adjunta el proxy de un medio; sin `archivo` sólo lee |
+| `premiere_relink` | Repunta un medio a otro archivo; el archivo tiene que existir y NO hay Cmd+Z |
+| `premiere_clonar` | Duplica un clip con sus efectos; el clon es INDEPENDIENTE del original |
 | `premiere_subclip` | Un pedazo con nombre de un medio, en el panel; verifica que el item aparezca |
 | `premiere_desactivar` | Apaga o prende el ojito DE UN CLIP, o de una pista entera en una sola transacción; existe para dejar los suplentes a la vista sin que tapen el corte |
 | `premiere_renombrar_pista` | Le pone nombre a una pista de video o audio; relee para confirmar |

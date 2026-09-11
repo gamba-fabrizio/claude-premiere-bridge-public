@@ -208,6 +208,8 @@ if (huerfanos.length) {
  * lo ponés acá, y en los dos casos lo decidiste. El default —no hacer nada— falla.
  */
 const SIN_HERRAMIENTA_A_PROPOSITO = [
+  /* Los usa `recargar.js` para que el Cmd+Q no se trabe con el cartel de guardar. */
+  "proyectosAbiertos", "cerrarProyecto",
   // Piezas del flujo de edición del curso, que se manejan por tandas desde un
   // script con pausas: como herramienta suelta invitan a la ráfaga que tira
   // Premiere. Ver "Y una ráfaga de TRANSACCIONES también lo tira" en CLAUDE.md.
@@ -3676,6 +3678,478 @@ titulo("Las transacciones de `colocarLote` se espacian entre lotes");
 }
 
 /* ---------- final ---------- */
+
+
+/*
+ * EL ESTADO DE SALIDA DE LA PISTA, en `clips` y en `revisar` (2026-09-11)
+ *
+ * El ojito de una pista era un modo de fallo silencioso COMPLETO: `clips` listaba los
+ * clips en su lugar, `revisar` contestaba "sin problemas", el colocador informaba
+ * "6 de 6 colocados y verificados", y el render salia NEGRO. Ningun verbo leia el dato.
+ *
+ * Las cuatro propiedades se chequean POR POSICION y sobre el cuerpo SIN COMENTARIOS,
+ * porque este repo ya tuvo cinco guardas ciegas que matchearon un token en un comentario,
+ * en la prosa de un mensaje, en un literal de string y en otro uso legitimo del mismo
+ * identificador.
+ */
+
+titulo("El estado de salida de la pista se lee, y aparece donde se lee");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const cuerpoDe = (nombre) => {
+    const m = srcComandos.match(new RegExp("async function " + nombre + "\\([\\s\\S]*?\\n\\}"));
+    return m ? limpiar(m[0]) : null;
+  };
+
+  const helper = cuerpoDe("estadoDeSalida");
+  const cClips = cuerpoDe("clips");
+  const cRevisar = cuerpoDe("revisar");
+
+  if (!helper) {
+    mal("no existe el helper `estadoDeSalida`",
+      "sin el, cada verbo lee el estado por su cuenta y los dos caminos se separan —\n         " +
+      "que es exactamente lo que `clips` ya pago con sus dos bucles de video y audio");
+  } else if (/catch[\s\S]*?return\s+false/.test(helper)) {
+    mal("`estadoDeSalida` devuelve FALSE cuando la lectura falla",
+      "false significa «la pista se ve», asi que una lectura fallada se informaria como\n         " +
+      "pista sana. Ese es el lado que ya costo un cuadro negro entregado: si no se pudo\n         " +
+      "leer, hay que DECIRLO, no asumir el caso bueno.");
+  } else if (!/\bisMuted\s*\(/.test(helper)) {
+    mal("`estadoDeSalida` no llama a `isMuted()`",
+      "es el unico metodo medido que contesta esto: setMute(true) dejo el cuadro en media 0,00");
+  } else {
+    ok("`estadoDeSalida` lee `isMuted` y NO asume que la pista se ve si la lectura falla");
+  }
+
+  /* Una lectura por PISTA, no por clip: la regla de este repo para los verbos que barren
+     una pista es preguntarse cuantas llamadas a la API se agregan POR CLIP. */
+  if (!cClips) {
+    mal("no se encontro el cuerpo de `clips`");
+  } else {
+    const lectura = cClips.search(/await\s+estadoDeSalida\s*\(/);
+    const bucleClips = cClips.search(/for\s*\(\s*let\s+i\s*=\s*0;\s*i\s*<\s*items\.length/);
+    if (lectura < 0) {
+      mal("`clips` no lee el estado de salida de la pista",
+        "vuelve a ser posible listar 6 clips en su lugar sobre una pista que no saca imagen");
+    } else if (bucleClips < 0) {
+      mal("`clips` ya no recorre los items con un for indexado",
+        "la guarda ubica la lectura respecto de ese bucle; si cambio la forma, hay que reescribirla");
+    } else if (!(lectura < bucleClips)) {
+      mal("`clips` lee el estado de salida DENTRO del bucle de clips",
+        "seria una llamada por CLIP en vez de una por PISTA. En una pista de 216 clips eso son\n         " +
+        "216 lecturas donde alcanza con 1, y este repo tiene tres crashes por lecturas en volumen.");
+    } else {
+      /* Y que el aviso este en el RESUMEN: un dato que esta en la respuesta y no en el
+         resumen es un dato que no esta. Se mira el tramo del resumen, no todo el verbo. */
+      const i0 = cClips.indexOf("resumen:");
+      const i1 = cClips.indexOf("clips: salida");
+      const tramo = i0 >= 0 && i1 > i0 ? cClips.slice(i0, i1) : "";
+      if (!/apagadas/.test(tramo)) {
+        mal("`clips` lee el estado de salida pero NO lo pone en el resumen",
+          "el resumen es lo unico que se lee. El dato quedaria en la respuesta, invisible,\n         " +
+          "que es como si no estuviera.");
+      } else {
+        ok("`clips` lee el estado UNA vez por pista y lo avisa en el resumen");
+      }
+    }
+  }
+
+  if (!cRevisar) {
+    mal("no se encontro el cuerpo de `revisar`");
+  } else if (!/apagadas\.push\s*\(\s*avisoDeSalida\s*\(/.test(cRevisar)) {
+    mal("`revisar` no registra las pistas sin salida",
+      "`revisar` es el chequeo de AFUERA y este es el caso que lo hacia contestar\n         " +
+      "«sin problemas» sobre un render negro");
+  } else if (!/if\s*\(\s*apagadas\.length\s*\)\s*partes\.push\s*\(/.test(cRevisar)) {
+    mal("las pistas sin salida de `revisar` no entran en `partes`",
+      "`partes` es lo unico que impide que el resumen diga «sin problemas». Registrar el\n         " +
+      "hallazgo y no meterlo ahi deja el verbo informando que esta todo bien.");
+  } else {
+    ok("`revisar` cuenta las pistas sin salida y eso impide el «sin problemas»");
+  }
+}
+
+
+/*
+ * EL CARTEL DE GUARDAR BLOQUEA EL Cmd+Q (2026-09-11)
+ *
+ * `guardar` guarda el proyecto con FOCO. Con dos abiertos, el otro saca su propio cartel de
+ * "guardar antes de cerrar" al recibir el Cmd+Q, y ese cartel traba el quit: la herramienta
+ * espera 45s y despues informa que el macro no anduvo. Es la CUARTA causa distinta de ese
+ * mismo informe equivocado, despues de la sesion remota, el macro equivocado y la ventana.
+ */
+
+titulo("Antes de cerrar Premiere se guardan TODOS los proyectos, no solo el del foco");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const rec = limpiar(fs.readFileSync(path.join(raiz, "herramientas", "recargar.js"), "utf8"));
+  const m = rec.match(/async function reiniciarPremiere\(\)[\s\S]*?\n\}/);
+  const cuerpo = m ? m[0] : null;
+
+  if (!cuerpo) {
+    mal("no se encontro `reiniciarPremiere` en recargar.js");
+  } else {
+    const todos = cuerpo.search(/enviar\(\s*"proyectosAbiertos"/);
+    const macro = cuerpo.search(/MACRO_CERRAR/);
+    const huerfano = /enviar\(\s*"cerrarProyecto"[\s\S]{0,120}descartar:\s*true/.test(cuerpo);
+    const cierra = cuerpo.search(/enviar\(\s*"cerrarProyecto"/);
+    const guarda = cuerpo.search(/enviar\(\s*"proyectosAbiertos",\s*\{\s*guardar:/);
+    if (todos < 0) {
+      mal("`reiniciarPremiere` no guarda todos los proyectos abiertos",
+        "guarda solo el del foco, y el cartel del OTRO traba el Cmd+Q. Medido el 2026-09-11.");
+    } else if (macro < 0) {
+      mal("`reiniciarPremiere` ya no dispara MACRO_CERRAR",
+        "la guarda ubica el guardado respecto del macro; si cambio la forma, hay que reescribirla");
+    } else if (!(todos < macro)) {
+      mal("se guardan los proyectos DESPUES de disparar el macro",
+        "para cuando se guardan, el cartel ya salio y el quit ya esta trabado. En " + todos +
+        " contra el macro en " + macro + ".");
+    } else if (!huerfano) {
+      mal("no se cierran los proyectos sin archivo en disco",
+        "un proyecto huerfano NO SE PUEDE guardar, asi que va a sacar el cartel igual.\n         " +
+        "Hay que cerrarlo descartando, que es el unico camino que no traba el quit.");
+    } else if (!(cierra >= 0 && guarda >= 0 && cierra < guarda)) {
+      /*
+       * EL ORDEN, que es donde estuvo el bug del propio arreglo. La primera version pedia
+       * "guarda todos" y DESPUES cerraba los huerfanos — pero una ruta cuyo archivo fue
+       * borrado sigue siendo una ruta, asi que el huerfano entraba en el guardado y Premiere
+       * abria "Project Modified". El arreglo produjo el modal que existia para evitar.
+       */
+      mal("se pide guardar ANTES de cerrar los huerfanos",
+        "un huerfano conserva su RUTA, asi que entra en el guardado y Premiere abre\n         " +
+        "\"Project Modified\" — el modal que todo esto existe para evitar. Medido el 2026-09-11.\n         " +
+        "cierre en " + cierra + ", guardado en " + guarda + ".");
+    } else {
+      ok("cierra los huerfanos, DESPUES guarda, y todo ANTES del macro");
+    }
+  }
+}
+
+titulo("`cerrarProyecto` no descarta trabajo por comodidad");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const m = srcComandos.match(/async function cerrarProyecto\([\s\S]*?\n\}/);
+  const cuerpo = m ? limpiar(m[0]) : null;
+
+  const pab = srcComandos.match(/async function proyectosAbiertos\([\s\S]*?\n\}/);
+  if (!pab) {
+    mal("no existe el verbo `proyectosAbiertos`");
+  } else if (/params\.guardar\s*===\s*true/.test(pab[0])) {
+    mal("`proyectosAbiertos` acepta `guardar: true` y decide solo a quien guardar",
+      "el panel NO VE EL DISCO, asi que no puede distinguir una ruta viva de una cuyo archivo\n         " +
+      "fue borrado — y guardar en la segunda abre \"Project Modified\". `guardar` tiene que ser\n         " +
+      "la LISTA DE RUTAS que arma el servidor, que si ve el disco.");
+  } else if (!/Array\.isArray\(params\.guardar\)/.test(pab[0])) {
+    mal("`proyectosAbiertos` no recibe la lista de rutas a guardar",
+      "quien puede guardarse lo decide el que ve el disco");
+  } else {
+    ok("`proyectosAbiertos` guarda solo las rutas que le nombran, no las que el cree vivas");
+  }
+
+  if (!cuerpo) {
+    mal("no existe el verbo `cerrarProyecto`");
+  } else if (/params\.proyecto\b/.test(cuerpo)) {
+    mal("`cerrarProyecto` lee `params.proyecto`",
+      "`proyecto` es la GUARDA del despachador: exige que el proyecto CON FOCO sea ese, asi que\n         " +
+      "cerrar uno que no tiene foco —el caso que traba el Cmd+Q— rebotaria. Va `cual`.");
+  } else if (!/abiertos\.length\s*<=\s*1/.test(cuerpo)) {
+    mal("`cerrarProyecto` puede cerrar el ULTIMO proyecto abierto",
+      "dejaria Premiere sin ninguno y todos los verbos que piden proyecto empezarian a fallar");
+  } else if (!/params\.descartar\s*!==\s*true[\s\S]{0,200}\.save\(\)/.test(cuerpo)) {
+    mal("`cerrarProyecto` no guarda antes de cerrar",
+      "`setPromptIfDirty(false)` DESCARTA los cambios en silencio, medido. Guardar tiene que ser\n         " +
+      "el default y descartar hay que pedirlo: perder trabajo para que no se trabe una\n         " +
+      "automatizacion es el intercambio equivocado.");
+  } else if (!/getProjectViewIds\(\)[\s\S]{0,600}indexOf\(nombre\)\s*===\s*-1/.test(cuerpo)) {
+    mal("`cerrarProyecto` no relee la lista para dar su veredicto",
+      "que close() devuelva true no prueba que se haya cerrado: el veredicto sale del ESTADO");
+  } else {
+    ok("`cerrarProyecto` usa `cual`, no cierra el ultimo, guarda por defecto y relee");
+  }
+}
+
+
+/*
+ * EL CARTEL DE GUARDAR BLOQUEA EL Cmd+Q (2026-09-11)
+ *
+ * `guardar` guarda el proyecto con FOCO. Con dos abiertos, el otro saca su propio cartel de
+ * "guardar antes de cerrar" al recibir el Cmd+Q, y ese cartel traba el quit: la herramienta
+ * espera 45s y despues informa que el macro no anduvo. Es la CUARTA causa distinta de ese
+ * mismo informe equivocado, despues de la sesion remota, el macro equivocado y la ventana.
+ */
+
+titulo("Antes de cerrar Premiere se guardan TODOS los proyectos, no solo el del foco");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const rec = limpiar(fs.readFileSync(path.join(raiz, "herramientas", "recargar.js"), "utf8"));
+  const m = rec.match(/async function reiniciarPremiere\(\)[\s\S]*?\n\}/);
+  const cuerpo = m ? m[0] : null;
+
+  if (!cuerpo) {
+    mal("no se encontro `reiniciarPremiere` en recargar.js");
+  } else {
+    const todos = cuerpo.search(/enviar\(\s*"proyectosAbiertos"/);
+    const macro = cuerpo.search(/MACRO_CERRAR/);
+    const huerfano = /enviar\(\s*"cerrarProyecto"[\s\S]{0,120}descartar:\s*true/.test(cuerpo);
+    const cierra = cuerpo.search(/enviar\(\s*"cerrarProyecto"/);
+    const guarda = cuerpo.search(/enviar\(\s*"proyectosAbiertos",\s*\{\s*guardar:/);
+    if (todos < 0) {
+      mal("`reiniciarPremiere` no guarda todos los proyectos abiertos",
+        "guarda solo el del foco, y el cartel del OTRO traba el Cmd+Q. Medido el 2026-09-11.");
+    } else if (macro < 0) {
+      mal("`reiniciarPremiere` ya no dispara MACRO_CERRAR",
+        "la guarda ubica el guardado respecto del macro; si cambio la forma, hay que reescribirla");
+    } else if (!(todos < macro)) {
+      mal("se guardan los proyectos DESPUES de disparar el macro",
+        "para cuando se guardan, el cartel ya salio y el quit ya esta trabado. En " + todos +
+        " contra el macro en " + macro + ".");
+    } else if (!huerfano) {
+      mal("no se cierran los proyectos sin archivo en disco",
+        "un proyecto huerfano NO SE PUEDE guardar, asi que va a sacar el cartel igual.\n         " +
+        "Hay que cerrarlo descartando, que es el unico camino que no traba el quit.");
+    } else if (!(cierra >= 0 && guarda >= 0 && cierra < guarda)) {
+      /*
+       * EL ORDEN, que es donde estuvo el bug del propio arreglo. La primera version pedia
+       * "guarda todos" y DESPUES cerraba los huerfanos — pero una ruta cuyo archivo fue
+       * borrado sigue siendo una ruta, asi que el huerfano entraba en el guardado y Premiere
+       * abria "Project Modified". El arreglo produjo el modal que existia para evitar.
+       */
+      mal("se pide guardar ANTES de cerrar los huerfanos",
+        "un huerfano conserva su RUTA, asi que entra en el guardado y Premiere abre\n         " +
+        "\"Project Modified\" — el modal que todo esto existe para evitar. Medido el 2026-09-11.\n         " +
+        "cierre en " + cierra + ", guardado en " + guarda + ".");
+    } else {
+      ok("cierra los huerfanos, DESPUES guarda, y todo ANTES del macro");
+    }
+  }
+}
+
+titulo("`cerrarProyecto` no descarta trabajo por comodidad");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const m = srcComandos.match(/async function cerrarProyecto\([\s\S]*?\n\}/);
+  const cuerpo = m ? limpiar(m[0]) : null;
+
+  const pab = srcComandos.match(/async function proyectosAbiertos\([\s\S]*?\n\}/);
+  if (!pab) {
+    mal("no existe el verbo `proyectosAbiertos`");
+  } else if (/params\.guardar\s*===\s*true/.test(pab[0])) {
+    mal("`proyectosAbiertos` acepta `guardar: true` y decide solo a quien guardar",
+      "el panel NO VE EL DISCO, asi que no puede distinguir una ruta viva de una cuyo archivo\n         " +
+      "fue borrado — y guardar en la segunda abre \"Project Modified\". `guardar` tiene que ser\n         " +
+      "la LISTA DE RUTAS que arma el servidor, que si ve el disco.");
+  } else if (!/Array\.isArray\(params\.guardar\)/.test(pab[0])) {
+    mal("`proyectosAbiertos` no recibe la lista de rutas a guardar",
+      "quien puede guardarse lo decide el que ve el disco");
+  } else {
+    ok("`proyectosAbiertos` guarda solo las rutas que le nombran, no las que el cree vivas");
+  }
+
+  if (!cuerpo) {
+    mal("no existe el verbo `cerrarProyecto`");
+  } else if (/params\.proyecto\b/.test(cuerpo)) {
+    mal("`cerrarProyecto` lee `params.proyecto`",
+      "`proyecto` es la GUARDA del despachador: exige que el proyecto CON FOCO sea ese, asi que\n         " +
+      "cerrar uno que no tiene foco —el caso que traba el Cmd+Q— rebotaria. Va `cual`.");
+  } else if (!/abiertos\.length\s*<=\s*1/.test(cuerpo)) {
+    mal("`cerrarProyecto` puede cerrar el ULTIMO proyecto abierto",
+      "dejaria Premiere sin ninguno y todos los verbos que piden proyecto empezarian a fallar");
+  } else if (!/params\.descartar\s*!==\s*true[\s\S]{0,200}\.save\(\)/.test(cuerpo)) {
+    mal("`cerrarProyecto` no guarda antes de cerrar",
+      "`setPromptIfDirty(false)` DESCARTA los cambios en silencio, medido. Guardar tiene que ser\n         " +
+      "el default y descartar hay que pedirlo: perder trabajo para que no se trabe una\n         " +
+      "automatizacion es el intercambio equivocado.");
+  } else if (!/getProjectViewIds\(\)[\s\S]{0,600}indexOf\(nombre\)\s*===\s*-1/.test(cuerpo)) {
+    mal("`cerrarProyecto` no relee la lista para dar su veredicto",
+      "que close() devuelva true no prueba que se haya cerrado: el veredicto sale del ESTADO");
+  } else {
+    ok("`cerrarProyecto` usa `cual`, no cierra el ultimo, guarda por defecto y relee");
+  }
+}
+
+
+/*
+ * LA TRABA DEL REINICIO A MEDIAS (2026-09-11)
+ *
+ * Lo que hace peligroso al cartel de "guardar antes de cerrar" no es que trabe el Cmd+Q: es
+ * que EL PANEL SIGUE LATIENDO Y CONTESTANDO con el modal arriba. Medido. Asi que desde este
+ * lado no se nota nada y se sigue trabajando sobre un Premiere a medio cerrar — ese dia se
+ * borro la carpeta de un proyecto que todavia estaba abierto.
+ *
+ * Informar no alcanza: el informe se lee y se sigue. Por eso el fallo TRABA EL TRANSPORTE.
+ */
+
+titulo("Un reinicio que no termina TRABA el transporte, no solo avisa");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const br = limpiar(fs.readFileSync(path.join(raiz, "server", "bridge.js"), "utf8"));
+  const rec = limpiar(fs.readFileSync(path.join(raiz, "herramientas", "recargar.js"), "utf8"));
+  const env = br.match(/async function enviar\([\s\S]*?\n\}/);
+
+  if (!env) {
+    mal("no se encontro `enviar` en server/bridge.js");
+  } else {
+    const cuerpo = env[0];
+    const chequeo = cuerpo.search(/leerTraba\s*\(/);
+    const prevuelo = cuerpo.search(/PREVUELO\[cmd\]/);
+    const carpeta = cuerpo.search(/asegurarCarpeta\s*\(/);
+    if (chequeo < 0) {
+      mal("el transporte no mira la traba",
+        "sin eso, un Premiere a medio cerrar sigue aceptando comandos y nada lo avisa");
+    } else if (prevuelo >= 0 && !(chequeo < prevuelo)) {
+      mal("la traba se mira DESPUES de PREVUELO",
+        "a un Premiere a medio cerrar no se le manda ni una comprobacion de parametros");
+    } else if (carpeta >= 0 && !(chequeo < carpeta)) {
+      mal("la traba se mira DESPUES de tocar `intercambio/`",
+        "trabado quiere decir que no se escribe NADA, ni el comando ni la carpeta");
+    } else {
+      ok("el transporte rebota todo mientras haya traba, y lo mira primero");
+    }
+  }
+
+  const fallo = rec.match(/if \(!cerro\) \{[\s\S]*?\n  \}/);
+  if (!fallo) {
+    mal("no se encontro la rama de cierre fallido en recargar.js");
+  } else if (!/ponerTraba\s*\(/.test(fallo[0])) {
+    mal("un cierre fallido NO deja la traba puesta",
+      "es la rama exacta del 2026-09-11: Premiere quedo con el cartel, el panel siguio\n         " +
+      "contestando, y se siguio trabajando a ciegas. Avisar no alcanzo.");
+  } else if (!/sacarTraba\s*\(/.test(rec)) {
+    mal("la traba no se levanta nunca sola",
+      "un reinicio que SI cierra el ciclo tiene que poder levantarla, o queda trabado para siempre");
+  } else if (!/--destrabar/.test(rec)) {
+    mal("no hay forma explicita de levantar la traba",
+      "tiene que levantarse A MANO: la traba existe justamente para que alguien MIRE la pantalla");
+  } else {
+    ok("el cierre fallido traba, el exitoso destraba, y hay `--destrabar` para levantarla a mano");
+  }
+}
+
+
+/*
+ * `relink` y `clonar`: los dos verbos que salieron de lo medido el 2026-09-11.
+ *
+ * Las propiedades que se exigen no son cosmeticas: cada una corresponde a una forma de
+ * fallar que se pago midiendo estos mismos metodos.
+ */
+
+titulo("`relink` y `clonar` conservan lo que costo medirlos");
+
+{
+  const limpiar = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const cuerpoDe = (n) => {
+    const m = srcComandos.match(new RegExp("async function " + n + "\\([\\s\\S]*?\\n\\}"));
+    return m ? limpiar(m[0]) : null;
+  };
+  const cRelink = cuerpoDe("relink");
+  const cClonar = cuerpoDe("clonar");
+
+  if (!cRelink) {
+    mal("no existe el verbo `relink`");
+  } else if (!/ClipProjectItem\.cast\s*\(/.test(cRelink)) {
+    mal("`relink` no castea a ClipProjectItem",
+      "`buscarMedio` devuelve un ProjectItem y estos metodos viven en ClipProjectItem: sin el\n         " +
+      "cast contestan \"is not a function\", que se lee como que la API no los tiene");
+  } else if (!/isOffline\s*\(\)[\s\S]*isOffline\s*\(\)/.test(cRelink) && !/const antes[\s\S]*const despues/.test(cRelink)) {
+    mal("`relink` no relee el estado despues de escribir",
+      "el veredicto sale de releer la ruta y el offline, no de que changeMediaFilePath no tire");
+  } else if (!/Cmd\+Z/.test(cRelink)) {
+    mal("`relink` no avisa que NO hay Cmd+Z",
+      "no pasa por executeTransaction. Quien lo use tiene que saber que se desanda repuntando\n         " +
+      "a la ruta anterior, y por eso el verbo la informa");
+  } else {
+    ok("`relink` castea, relee el estado y avisa que no hay deshacer");
+  }
+
+  if (!cClonar) {
+    mal("no existe el verbo `clonar`");
+  } else if (!/destIdx\s*-\s*origenIdx/.test(cClonar) || !/segDestino\s*-\s*t4\.desde/.test(cClonar)) {
+    /*
+     * LA PROPIEDAD QUE IMPORTA. `createCloneTrackItemAction` toma OFFSETS relativos al clip
+     * origen, no posiciones: pedir "tick 40" sobre un clip que arranca en 2,52 deja el clon
+     * en 42,52, y el argumento de pista se SUMA al indice de origen. Exponer eso crudo es
+     * garantizar que el proximo que lo use ponga el clon en otro lado — paso midiendolo, y
+     * ademas hizo que tres clones que SI habian entrado se informaran como fallados.
+     */
+    mal("`clonar` no traduce el destino ABSOLUTO a los offsets que la API espera",
+      "la API toma offsets relativos al clip origen. Si el verbo pasa el destino tal cual,\n         " +
+      "el clon cae en otra pista y otro tiempo, y el que llama no tiene como sospecharlo.");
+  } else if (!/getTimebase\s*\(/.test(cClonar)) {
+    mal("`clonar` no cuantiza al cuadro",
+      "la API acepta sub-frame; un clip entre frames deja huecos de medio cuadro que `revisar`\n         " +
+      "informa y que nadie pidio. Es el defecto que `marcar` ya pago con 121 de 139 marcadores.");
+  } else if (!/getTrackItems[\s\S]*Math\.abs\(t\.desde\s*-\s*segDestino\)/.test(cClonar)) {
+    mal("`clonar` no busca el clon releyendo la pista destino",
+      "`executeTransaction` devolvio true sobre clones que no entraron, y contar la pista\n         " +
+      "equivocada informo \"NO CLONO\" sobre tres que si. El veredicto es encontrar el clip.");
+  } else if (!/pasó de \$\{cuantasV\} a \$\{cuantasDespues\} pistas/.test(cClonar)) {
+    mal("`clonar` no avisa cuando CREA pistas de video",
+      "clonar las crea —la secuencia de prueba paso de 6 a 8— y no hay API para borrarlas.\n         " +
+      "Que aparezcan sin aviso es dejarle al usuario un cambio que no puede deshacer.");
+  } else {
+    ok("`clonar` traduce a offsets, cuantiza, relee la pista destino y avisa si creo pistas");
+  }
+}
+
+
+/*
+ * `crearProyecto` con una carpeta padre inexistente NO falla: Premiere trunca la ruta y
+ * crea el proyecto un nivel mas arriba, sin extension, e informa que lo creo. El chequeo
+ * de disco que ya existia en `server/index.js` mira DESPUES: informa el daño.
+ *
+ * Y tiene que estar en `server/bridge.js`, que es el transporte: las herramientas del repo
+ * llaman por ahi y saltean las herramientas MCP. Una guarda solo en el despachador no esta
+ * cuando la llama un script — que es exactamente como se pago esto.
+ */
+
+titulo("El prevuelo de rutas esta en el transporte y corre ANTES de mandar");
+
+{
+  const src = fs.readFileSync(path.join(raiz, "server/bridge.js"), "utf8");
+  const cuerpo = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const tabla = cuerpo.indexOf("const PREVUELO");
+  const enviar = cuerpo.indexOf("async function enviar(");
+  const usa = cuerpo.indexOf("PREVUELO[cmd]", enviar < 0 ? 0 : enviar);
+  const carpeta = cuerpo.indexOf("asegurarCarpeta()", enviar < 0 ? 0 : enviar);
+  const mira = /statSync|existsSync/.test(cuerpo.slice(tabla < 0 ? 0 : tabla, tabla < 0 ? 0 : tabla + 1400));
+
+  if (tabla < 0) {
+    mal("no existe `PREVUELO` en server/bridge.js",
+      "sin el, `crearProyecto` con una carpeta inexistente crea un proyecto deforme y dice que lo creo");
+  } else if (usa < 0) {
+    mal("`PREVUELO` esta declarado pero `enviar` no lo consulta",
+      "una tabla que nadie mira es peor que no tenerla: da sensacion de estar protegido");
+  } else if (!(usa < carpeta)) {
+    mal("el prevuelo corre DESPUES de tocar la carpeta de intercambio",
+      "tiene que rebotar antes de mandar nada: una llamada mal formada no ejecuta ni las comprobaciones");
+  } else if (!mira) {
+    mal("el prevuelo no mira el DISCO",
+      "el panel no puede leerlo; si esta comprobacion no lo hace, no la hace nadie antes de crear");
+  } else {
+    /*
+     * Por REGION, no por ancho fijo. Esto miraba `slice(tabla, tabla + 400)` y se rompio al
+     * agregar una entrada: `crearProyecto` quedo fuera de la ventana y el chequeo informo que
+     * faltaba de la tabla estando ahi. Es el mismo defecto que la guarda que cortaba 900
+     * caracteres de prosa — una guarda que mide ANCHO en vez de ALCANCE avisa de mentira en
+     * cuanto el archivo crece.
+     */
+    const region = cuerpo.slice(tabla, enviar < 0 ? cuerpo.length : enviar);
+    const faltan = ["crearProyecto", "relink"].filter((k) => !new RegExp("\\b" + k + "\\s*:").test(region));
+    if (faltan.length) {
+      mal("faltan entradas en la tabla del prevuelo: " + faltan.join(", "),
+        "cada una comprueba en el DISCO algo que el panel no puede ver");
+    } else {
+      ok("el prevuelo mira el disco y corre antes de mandar el comando", "crearProyecto, relink");
+    }
+  }
+}
+
 
 console.log("");
 if (fallos) {

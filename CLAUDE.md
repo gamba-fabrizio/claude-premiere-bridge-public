@@ -1,7 +1,7 @@
 # Bridge Claude ↔ Premiere Pro — lo que costó medir
 
 Le da a un agente control de Premiere Pro: leer la secuencia, **mirar el frame**, navegar,
-animar, editar y armar timeline. **51 herramientas MCP sobre 65 verbos del panel** — la
+animar, editar y armar timeline. **53 herramientas MCP sobre 69 verbos del panel** — la
 diferencia importa, ver *Al escribir un verbo nuevo*.
 
 Esos dos números los chequea `test.js` contra el código. Escritos a mano envejecen: decían
@@ -466,7 +466,7 @@ existe: un grupo vinculado es siempre video + audio.
 ## Los nombres vienen en DOS normalizaciones distintas
 
 macOS entrega los nombres de archivo en **NFD** —"á" es `a` más una tilde combinante— y
-Premiere los devuelve en **NFC**. Se ven idénticos y no son la misma cadena:
+Premiere devuelve los NOMBRES en **NFC**. Se ven idénticos y no son la misma cadena:
 
 ```
 del disco  : 61 cc81 6c696461     ("a" + U+0301)
@@ -485,6 +485,30 @@ Corolario cobrado semanas después: una comparación de rutas en otra herramient
 aplicado el helper de normalización, y rechazaba un armado correcto imprimiendo dos líneas
 idénticas en pantalla. **Una regla implementada en un lugar no se aplica sola al de al
 lado.**
+
+### Y las RUTAS vienen al revés que los nombres
+
+Los **nombres** salen en NFC; las **rutas de archivo**, que vienen del filesystem, salen en
+**NFD**. Medido sobre un item con acento en la ruta: `ruta === ruta.normalize("NFD")` da true
+y NFC da false.
+
+Importa porque hay métodos que comparan la cadena **exacta**. Uno de búsqueda por ruta
+devolvía `array de 0` sobre un medio que estaba en el proyecto, con su archivo presente, y
+estuve a un paso de anotar que no servía:
+
+```
+la ruta tal como la devuelve la API   NFD  ->  1
+la misma en NFC                            ->  0
+```
+
+**El error fue mío: RETIPEÉ la ruta** como literal en la línea de comando en vez de pasar la
+que la API había devuelto. Mi tipeo salió NFC.
+
+Y lo que lo destapó no fue mirar mejor el código: fue un **control positivo** con una ruta sin
+caracteres no-ASCII, que devolvió 1 y probó que el lector funcionaba.
+
+**La regla corta: no retipear nunca una ruta que la API ya devolvió.** Si hay que construirla,
+`normalize("NFD")`.
 
 ## Premiere recuantiza el in-point a la grilla de la SECUENCIA
 
@@ -552,8 +576,12 @@ Anotadas porque cada una se descubrió intentándola, y algunas tienen una vía 
 pegar la cola con un overwrite. Y **el overwrite no copia nada**, así que la cola nace con
 Motion por defecto y **borra el escalado del clip original** si no se lo repone a mano.
 
-**No se pueden agregar pistas de VIDEO.** Las de **audio** se crean solas al pedir una fuera
-de rango; las de video no: `Sequence` sólo expone `getVideoTrack` y `getVideoTrackCount`.
+**No hay verbo para agregar pistas de VIDEO** —`Sequence` sólo expone `getVideoTrack` y
+`getVideoTrackCount`—, pero **CLONAR las crea**: un clon cuyo destino queda por encima de las
+que hay hizo que una secuencia pasara de 6 a 8 pistas sin que nadie lo pidiera. Así que la
+afirmación "la API no puede" es falsa; lo que no hay es una vía para pedirlo a propósito.
+**Y tampoco hay para BORRARLAS**, así que las que aparecen quedan. Las de **audio** sí se
+crean solas al pedir una fuera de rango.
 
 **No hay `detachProxy`.** Se adjunta y no se suelta. Corolario: **no adjuntar nunca un proxy
 que viva en una carpeta temporal.**
@@ -624,6 +652,110 @@ todas apagadas        142,6
 ```
 
 ---
+
+## Y `clonar` SÍ es una copia de verdad
+
+La contracara de lo de arriba, y lo que lo vuelve utilizable.
+`SequenceEditor.createCloneTrackItemAction` duplica un clip **con sus efectos, su Motion y su
+recorte**, y el clon queda **independiente**. Probado por la inversa, que es la única prueba
+que distingue una copia de un vínculo:
+
+```
+Scale        original 100  ->  100      clon 100  ->   42
+Exposure     fuente  1,75  ->  1,75     clon 1,75 -> -3,25
+```
+
+Escribiendo en el clon, el original no se movió. Con un param intrínseco (`Motion`) y con un
+efecto agregado (`Lumetri`), que también viaja.
+
+**Lo que NO reemplaza:** clona el CLIP entero a otro lugar. Llevar un look a un clip que YA
+existe sigue siendo copiar el componente, con su instancia compartida.
+
+### La firma toma OFFSETS, no posiciones — y eso hay que esconderlo
+
+```
+origen arranca 2,52s · pedido "tick 40"   ->  el clon quedo en 42,52s
+origen arranca 20s   · pedido "tick 40"   ->  el clon quedo en 60s
+```
+
+El argumento de pista **se suma** al índice de la pista de origen, así que un clon "a V4"
+desde V3 aterriza en V6. Exponer eso crudo garantiza que el próximo lo ponga en otro lado.
+
+**El verbo recibe el destino ABSOLUTO y hace la resta**, y además cuantiza al cuadro avisando
+cuánto movió. Es la misma regla que otro verbo de este repo ya pagó dejando 121 de 139
+marcadores entre frames: aplicarla al de al lado ANTES de que muerda es más barato que
+descubrirla dos veces.
+
+## Un medio se puede REPUNTAR a otro archivo, y el ciclo persiste
+
+`ClipProjectItem.changeMediaFilePath` + `refreshMedia`. Medido de punta a punta sobre un
+proyecto armado a propósito:
+
+```
+proyecto abierto con el medio AUSENTE   isOffline true
+export en ese estado                    media 97,83
+repuntado                               isOffline false
+export despues                          IDENTICO al sano (media 124,338)
+cerrar y reabrir                        sigue online: la reparacion PERSISTE
+```
+
+**Tres cosas que sólo aparecen midiéndolo:**
+
+- **Un clip offline NO exporta NEGRO: exporta la placa "Media Offline"**, que dio media 97,83.
+  Detectarlo preguntando "¿el cuadro es negro?" no funciona; lo dice `isOffline`.
+- **Premiere relinkea SOLO** cuando el archivo se movió dentro del árbol del proyecto. Para
+  conseguir un offline de verdad hubo que mandarlo afuera **y con otro nombre**. Los dos
+  primeros intentos fallaron por eso y parecían un fallo del método.
+- **El archivo destino tiene que existir, y eso lo comprueba el lado que ve el DISCO.** El
+  panel no lo ve. Repuntar a una ruta ausente deja el medio offline y Premiere recién lo avisa
+  al reproducir, que se lee como un problema del archivo original.
+
+Y **no pasa por una transacción, así que no hay Cmd+Z**: se desanda repuntando a la ruta
+anterior, que por eso el verbo informa.
+
+## El cartel de guardar BLOQUEA el Cmd+Q — y el panel sigue contestando
+
+Esto es un modo de fallo del ENTORNO, no de la API, y es de los que más caro salen porque no
+se nota.
+
+Cerrar Premiere con un macro es lo que hace automatizable recargar el plugin. Con **dos
+proyectos abiertos**, el Cmd+Q le pide guardar al que NO tiene foco, sale su cartel, y el
+cartel traba el cierre. Hasta ahí es un cuelgue.
+
+**Lo grave es que EL PANEL SIGUE LATIENDO Y CONTESTANDO con el modal en pantalla.** Medido: el
+verbo de estado respondió normal, con su resumen completo. Así que desde el otro lado no se
+nota nada y se sigue trabajando sobre un Premiere a medio cerrar, con el proyecto en el limbo.
+Esa sesión terminó borrando la carpeta de un proyecto que todavía estaba abierto.
+
+**Y el cartel puede estar en OTRO MONITOR.** `screencapture -x` captura UNA pantalla; para
+verlas todas hay que darle un nombre por pantalla.
+
+### Informar no alcanza: hay que TRABAR
+
+La primera versión del arreglo guardaba todos los proyectos antes de cerrar y, si igual
+fallaba, lo informaba. **El informe se lee y se sigue**, que es literalmente lo que había
+pasado. Así que ahora un cierre que no termina **deja una marca y el transporte REBOTA TODA
+LLAMADA** hasta que alguien mire la pantalla y la levante a mano.
+
+Va en el **transporte** —no en la herramienta— porque es el único punto por el que pasan los
+dos caminos: las herramientas del repo llaman directo y saltean la capa MCP.
+
+### Y el arreglo produjo el modal que existía para evitar
+
+Pedía "guardá todos" y **después** cerraba los proyectos huérfanos. Pero **un proyecto cuyo
+archivo fue borrado sigue teniendo RUTA**, así que entraba en el guardado y Premiere abrió:
+
+```
+Project Modified — The project file has been modified since last save. Do you wish to continue?
+```
+
+El chequeo miraba si la ruta estaba **vacía**, no si el archivo **existía**. Peor: el
+comentario de esa misma función decía que el veredicto lo daba el lado que ve el disco, y no
+estaba implementado — **un comentario que describe la intención en vez del código**.
+
+El arreglo es el ORDEN, y la firma lo hace cumplir: el parámetro dejó de ser un booleano y
+pasó a ser **la lista de rutas** que arma el lado que ve el disco. El panel ya no puede
+decidirlo, así que tampoco puede equivocarse.
 
 # Lo que el `.prproj` tiene y la API no expone
 
@@ -770,7 +902,16 @@ El mismo patrón, en otro verbo: un `try/catch` que convierte un fallo de lectur
 vacía, informa **"0 clips"** y sigue como si no hubiera nada que hacer. Visto en vivo con la
 pista teniendo 88.
 
-## Una pista con el OJO APAGADO no la ve NINGÚN verbo
+**Y volvió a pasar, en una sonda escrita el mismo día que releí esto.** Medía si un clon había
+entrado contando los clips de **la pista que yo suponía** que era el destino; como el argumento
+resultó ser un offset, el clon caía en otra. La sonda informó **"NO CLONÓ NADA" tres veces
+sobre clones que sí habían entrado**.
+
+Lo destapó **contar el total de la secuencia**: 12 clips al empezar, 18 después de las corridas
+"fallidas". El número de la pista mentía; el del conjunto no. Cuando un contador parcial diga
+que no pasó nada, contá el total.
+
+## ~~Una pista con el OJO APAGADO no la ve NINGÚN verbo~~ RESUELTO
 
 ```
 clips             la lista igual, en su lugar y con su duración
@@ -778,6 +919,30 @@ revisar           "sin problemas"
 el colocador      "6 de 6 colocados y verificados"
 el frame          NEGRO
 ```
+
+**`VideoTrack.isMuted()` existía y nadie lo había mirado.** La lectura entró en `clips` y en
+`revisar`, y con eso el fallo dejó de ser silencioso: `clips` avisa en el RESUMEN y `revisar`
+mete la pista en su lista de problemas, así que ya no puede imprimir "sin problemas" sobre un
+render negro.
+
+**Las dos clases de pista, medidas por separado**, porque el aviso dice cosas distintas y
+afirmar la de audio sin medirla habría sido inventar:
+
+```
+pista de VIDEO   media del cuadro  89,07  ->  0,00        (negro)
+pista de AUDIO   mean -37,1 dB     ->  -91,0 dB           (silencio digital)
+```
+
+Cuatro decisiones que valen para cualquier verbo que agregue una lectura:
+
+- **El aviso va en el RESUMEN**, no sólo en el dato: un dato que está en la respuesta y no en
+  el resumen es un dato que no está.
+- **En `revisar` entra en la lista que suprime el "sin problemas"**, y PRIMERO: una pista sin
+  salida invalida todo lo demás que el verbo pueda informar.
+- **UNA lectura por PISTA, no por clip.** El `track` ya está en la mano. Medido: el verbo pasó
+  de 203 ms a 202 ms.
+- **Si la lectura falla se INFORMA, no se asume `false`.** `false` significa "se ve", así que
+  tragarse el error reportaría como sana una pista que no se pudo mirar.
 
 Los tres primeros informes son CORRECTOS —el clip está ahí— y ninguno contesta la pregunta
 que importaba, que es si se ve.
