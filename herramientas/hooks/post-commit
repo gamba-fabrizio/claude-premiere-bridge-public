@@ -1,0 +1,32 @@
+#!/bin/sh
+# Empuja cada commit a los dos remotos: `backup` (Drive) y `origin` (GitHub).
+#
+# POR QUE EXISTE: el 2026-09-10 el respaldo de Drive estaba 24 commits y seis
+# dias atras, y NADA lo avisaba. El problema no era el destino sino que empujar
+# es manual y se olvida.
+#
+# SINCRONICO A PROPOSITO: en background el error no se ve, y un respaldo que
+# falla callado es peor que no tenerlo -- deja creyendo que estas cubierto.
+# Un commit tarda 2-3s mas; es el precio de que el fallo sea visible.
+#
+# post-commit corre DESPUES del commit, asi que no puede abortarlo: si un push
+# falla, el commit ya esta hecho y local sigue siendo la fuente de verdad.
+
+GIT_TERMINAL_PROMPT=0; export GIT_TERMINAL_PROMPT   # nunca colgarse pidiendo credenciales
+
+rama=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+[ -z "$rama" ] && exit 0                            # HEAD suelto (rebase, checkout de un commit)
+
+fallo=0
+for r in backup origin; do
+    git remote get-url "$r" >/dev/null 2>&1 || continue
+    if salida=$(git push "$r" "$rama" 2>&1); then
+        echo "  push ok -> $r"
+    else
+        fallo=1
+        echo "  PUSH FALLO -> $r"
+        echo "$salida" | sed 's/^/      /'
+    fi
+done
+[ "$fallo" = "1" ] && echo "  (el commit esta hecho; corregi y volve a empujar a mano)"
+exit 0

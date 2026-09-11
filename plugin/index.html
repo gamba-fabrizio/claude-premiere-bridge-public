@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      /* UXP no es un navegador. Las trampas que aplican acá:
+         - `gap` de flexbox no existe: la separación va con márgenes.
+         - <button> descarta el background: los botones serían <div role="button">
+           (este panel no tiene ninguno, y mejor así).
+         - background-image con SVG no se dibuja y no avisa: nada de íconos. */
+      body {
+        background: #1e1e1e;
+        color: #ddd;
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 12px;
+        padding: 12px;
+      }
+      .titulo { font-weight: bold; margin-bottom: 10px; }
+      .campo { margin-bottom: 8px; }
+      .etiqueta { color: #888; margin-bottom: 2px; }
+      .valor { white-space: pre-wrap; }
+      #latido { color: #7c7; }
+      .nota { color: #888; margin-top: 12px; border-top: 1px solid #333; padding-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="titulo">Claude ↔ Premiere</div>
+
+    <div class="campo">
+      <div class="etiqueta">Latido</div>
+      <div class="valor" id="latido">—</div>
+    </div>
+
+    <div class="campo">
+      <div class="etiqueta">Estado</div>
+      <div class="valor" id="estado">—</div>
+    </div>
+
+    <div class="campo">
+      <div class="etiqueta">Último comando</div>
+      <div class="valor" id="ultimo">ninguno</div>
+    </div>
+
+    <div class="nota">
+      Mientras este panel esté abierto, Claude puede leer la secuencia y escribir
+      en el clip seleccionado. Cerralo para cortar el acceso.
+    </div>
+
+    <script src="lib/comandos.js"></script>
+    <script src="index.js"></script>
+  </body>
+</html>

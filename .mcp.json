@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "premiere-bridge": {
+      "command": "node",
+      "args": ["/RUTA/ABSOLUTA/A/TU/COPIA/premiere-bridge/server/index.js"]
+    }
+  }
+}

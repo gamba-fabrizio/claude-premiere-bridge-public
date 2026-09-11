@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+*.ccx
+
+# El canal entre el servidor y el panel. La carpeta hace falta (ver .gitkeep),
+# lo que pasa por adentro es el último intercambio y no se versiona.
+intercambio/*
+!intercambio/.gitkeep
