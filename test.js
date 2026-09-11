@@ -3149,7 +3149,7 @@ titulo("Si el hook esta INSTALADO, la copia instalada es la del repo");
 
 /*
  * Hasta el 2026-09-10 apagar V2 dejaba SONANDO A2. Ya habia mordido: el paliativo
- * fue mutear A2/A3/A4 a mano en VIAJE. Verificado contra Premiere ese dia, antes y
+ * fue mutear A2/A3/A4 a mano en la secuencia del corte. Verificado contra Premiere ese dia, antes y
  * despues del arreglo.
  *
  * Las tres cosas se chequean juntas porque la segunda es la que hace peligroso al

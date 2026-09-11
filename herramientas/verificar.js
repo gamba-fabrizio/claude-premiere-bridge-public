@@ -12,7 +12,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const D = process.env.PROYECTO_CN || process.cwd();
+const D = process.env.PROYECTO_DIR || process.cwd();
 const T = path.join(D, "verif");
 
 /* El prefijo del nombre sale de los propios archivos, no escrito a mano: la

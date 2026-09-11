@@ -351,7 +351,7 @@ mal; con VAD quedaron a 70ms.
 
 `audio.js` transcribe un clip. Las otras cinco son la cadena que va de una
 carpeta de crudos a las secuencias armadas en Premiere. Todas trabajan sobre la
-carpeta del proyecto: la toman de `PROYECTO_CN` o del directorio actual, y
+carpeta del proyecto: la toman de `PROYECTO_DIR` o del directorio actual, y
 deducen el prefijo del nombre de los propios archivos.
 
 | | qué hace |
@@ -364,7 +364,7 @@ deducen el prefijo del nombre de los propios archivos.
 
 **La lista de beats NO está en el código.** Es criterio editorial de cada jornada
 y vive con el material, en un `beats.js` que exporta una función; hay un ejemplo
-real en `beats.ejemplo.js`. Es la misma regla que el glosario: lo del proyecto va
+en `beats.ejemplo.js`, con contenido inventado. Es la misma regla que el glosario: lo del proyecto va
 con el proyecto.
 
 Corridas sobre dos jornadas reales de la misma empresa, con material muy

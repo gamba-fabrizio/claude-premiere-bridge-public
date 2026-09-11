@@ -88,7 +88,7 @@
  * al final.
  *
  * Uso:
- *   node colocar_propuesta.js --datos <propuesta.json> --secuencia VIAJE
+ *   node colocar_propuesta.js --datos <propuesta.json> --secuencia CORTE
  *        [--pista-corte 1] [--suplentes 2] [--tema "TEMA - ..."] [--limpiar] [--simular]
  *
  *   --limpiar         barre TODAS las pistas de video. OJO: se lleva las capas de ajuste

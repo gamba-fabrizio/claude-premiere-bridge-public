@@ -9,7 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const { enviar } = require(path.join(__dirname, "..", "server", "bridge.js"));
-const D = process.env.PROYECTO_CN || process.cwd();
+const D = process.env.PROYECTO_DIR || process.cwd();
 
 /* El prefijo del nombre sale de los propios archivos, no escrito a mano: la
  * jornada anterior era `CerroNegro_19-12-25_` y ésta `CerroNegro_18-11-25_`.

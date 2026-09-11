@@ -155,8 +155,9 @@ entero en CADA cuadro y no se amortiza aunque el modelo quede cargado:**
 
 ```
                   encoding    descripcion                 OCR (5 textos en cuadro)
-768 px             155 s      "guitarra electrica"        3 de 5, y "MATIAS DRAGAN"
-                              (es un BAJO)                 por MATIAS DRAGUN
+768 px             155 s      "guitarra electrica"        3 de 5, y el nombre propio
+                              (es un BAJO)                 que habia en pantalla leido
+                                                           MAL, y distinto cada vez
 448 px              57 s      "bajo electrico"  CORRECTO   "NINGUNO"   <- ciego total
 ```
 

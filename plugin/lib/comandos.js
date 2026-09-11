@@ -1572,7 +1572,7 @@ async function param(params) {
  *
  * Se pueden enumerar —`VideoFilterFactory.getMatchNames()` y `getDisplayNames()`—
  * y eso es lo que hace usable a `agregarEfecto`: sin esto habría que saberse los
- * match names de memoria, que es como MZH terminó con "AE.ADBE Geometry2"
+ * match names de memoria, que es como otro plugin terminó con "AE.ADBE Geometry2"
  * hardcodeado y descubierto a mano.
  *
  * Los nombres visibles NO son los que uno espera: el Gaussian Blur figura como
@@ -1679,7 +1679,7 @@ async function catalogo(params) {
  *
  * Verifica releyendo la cadena de componentes. Y espera: un componente recién
  * insertado puede tardar en quedar disponible, y preguntarle los params en el
- * acto devuelve cero —MZH ya se comió esa—.
+ * acto devuelve cero —otro plugin ya se comió esa—.
  */
 async function agregarEfecto(params) {
   const { project, sequence } = await getProyectoYSecuencia();
@@ -6813,7 +6813,7 @@ async function leerEscalas(params) {
            * se murió después, que es lo que hizo tan difícil atribuirlo.
            *
            * Eso explica lo que no cerraba: por qué batchear de a 10 no alcanzaba
-           * (baja la ráfaga, no saca el puntero), por qué MZH no crashea (lo
+           * (baja la ráfaga, no saca el puntero), por qué otro plugin que llama lo mismo no crashea (lo
            * llama de a uno) y por qué daba igual `Scale` que `Position`.
            *
            * De la lista de ticks se sigue usando `getKeyframeListAsTickTimes`,
@@ -9540,7 +9540,7 @@ async function desactivar(params) {
    * exactamente la regla de `buscarVinculados`, pagada una vez y no N.
    *
    * Por que hace falta: sin esto, apagar V2 dejaba SONANDO A2. Ya mordio — el
-   * paliativo fue mutear A2/A3/A4 a mano en VIAJE.
+   * paliativo fue mutear A2/A3/A4 a mano en la secuencia del corte.
    */
   const traerSocios = params.vinculados !== false;
   const socios = [];
@@ -9921,7 +9921,7 @@ async function sondaParam(params) {
     /*
      * `metodos: true` REFLEJA el param vivo: la clase no está a nivel de módulo, así que
      * `api` no llega. Lee NOMBRES recorriendo la cadena de prototipos y no llama a ninguno
-     * —una sonda que enumeró llamando getters crasheó Premiere en MZH—. Hace falta para
+     * —una sonda que enumeró llamando getters crasheó Premiere en otro plugin—. Hace falta para
      * diseñar `borrarKeyframe` sobre la firma real en vez de adivinarla.
      */
     if (params.metodos) {

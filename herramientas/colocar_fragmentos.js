@@ -157,7 +157,7 @@ function medio(nombre) {
      *
      * Con uno solo alcanzaba para material agrupado por dia. El corte REAL de un videoclip lo desmintio
      * el 2026-09-05: los planos de los musicos viven en
-     * `INSTRUMENTOS - EMPRENDER EL VIAJE/Percu (sin playback ni musica)/C0012.MP4`, o sea a dos,
+     * `INSTRUMENTOS/Percu (sin playback ni musica)/C0012.MP4`, o sea a dos,
      * y la herramienta rebotaba la tanda entera por 16 archivos "no encontrados" que estaban ahi.
      *
      * Rebotar era lo correcto —mejor eso que colocar 72 de 88— pero la busqueda estaba corta. Es

@@ -3,7 +3,7 @@
  * dentro de cada uno — que según el editor se resuelven quedándose con la última. */
 const fs = require("fs");
 const path = require("path");
-const D = process.env.PROYECTO_CN || process.cwd();
+const D = process.env.PROYECTO_DIR || process.cwd();
 
 const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9ñ ]/g, " ").replace(/\s+/g, " ").trim();
 
