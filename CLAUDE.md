@@ -1,7 +1,7 @@
 # Bridge Claude ↔ Premiere Pro — lo que costó medir
 
 Le da a un agente control de Premiere Pro: leer la secuencia, **mirar el frame**, navegar,
-animar, editar y armar timeline. **53 herramientas MCP sobre 69 verbos del panel** — la
+animar, editar y armar timeline. **54 herramientas MCP sobre 70 verbos del panel** — la
 diferencia importa, ver *Al escribir un verbo nuevo*.
 
 Esos dos números los chequea `test.js` contra el código. Escritos a mano envejecen: decían
@@ -1080,6 +1080,136 @@ Un comentario que describe la intención en vez del código **es peor que ningun
 próximo que lo lea no va a mirar. Pasó: un encabezado afirmaba que los params se leían
 sincrónicamente adentro de un lock, y el código pedía cada valor con un `await` afuera. Ese
 comentario tapó el régimen que después crasheó.
+
+## Escribir algo que nada puede releer no es tenerlo
+
+`marcar` aceptaba `duracion` y el rango entraba, pero `marcadores` devolvía sólo `segundos`,
+`nombre`, `comentario` y `color`. O sea que el bridge **no podía verificar lo que acababa de
+escribir**: es el *"el veredicto sale del ESTADO"* de este archivo sin estado que leer, y la
+comprobación tuvo que salir de abrir el `.prproj`.
+
+Arreglado leyendo `getDuration()`, que ya estaba a la vista. Verificado con los DOS casos, que es
+lo que lo hace concluyente:
+
+```
+marcar segundos:5  duracion:3   ->  {segundos:5,  duracion:3}   resumen "5s +3"
+marcar segundos:20 (sin dur)    ->  {segundos:20, duracion:0}   resumen "20s"
+```
+
+**Y un fallo de lectura NO cae a 0.** Cero es un marcador de PUNTO, una respuesta legítima:
+tragarse la excepción informaría "no tiene rango" sobre uno que sí lo tiene. Va en
+`duracionError` y el resumen lo nombra. Es el mismo lado por el que se paga un cuadro negro
+cuando un lector que falló devuelve el valor "todo bien".
+
+## La guarda contra el BARRIDO, y por qué los números no son los que uno propone
+
+Barrer una pista con `borrar` de a un clip tira Premiere. Estaba documentado desde la primera vez
+—176 clips con solapes— y **volvió a pasar**, con 8 llamadas seguidas espaciadas ~1,3s. La sesión
+que lo provocó había leído este archivo al empezar. O sea que lo que faltaba no era documentación:
+era algo que rebotara.
+
+Ahora `borrar` rebota a partir del 6to borrado en 60s, con el mensaje que manda al Delete nativo.
+
+**Los números no son los que proponía la nota original** ("a partir de la 3ra en, digamos, 30s").
+Ese "digamos" marcaba que no estaban medidos. Lo que sí está medido es el daño: ráfagas de 8 y de
+176. Con 3-en-30s, borrar cuatro clips puntuales a lo largo de medio minuto —uso legítimo y nada
+raro— rebotaría, y **rechazar lo correcto es el peor modo de fallo de una guarda**.
+
+Tres cosas del cómo:
+
+- **Vive en el PANEL**, no en la herramienta MCP: las herramientas llaman por el transporte directo
+  y saltean las MCP.
+- **Cuenta los borrados que SALIERON**, no los intentos: uno que rebota por parámetros no ejecuta
+  ninguna transacción, así que contarlo sólo castigaría un reintento legítimo.
+- **El chequeo lee el bloque por LLAVES BALANCEADAS.** La primera versión buscaba `throw new Error`
+  con un `indexOf` y **pasaba con `return {}; if (0) throw ...`**: el texto seguía ahí y la guarda
+  estaba desarmada. Es el mismo agujero que tuvo la guarda del `-1`, cuyo `[^)]*?` no podía
+  atravesar una llamada anidada.
+
+## Un contador que mira la pista de VIDEO miente con un medio que no tiene video
+
+Un `.wav` no pone nada en la pista de video, así que un verificador que cuenta items de V1 informa
+fracaso sobre un clip que entró perfecto en A1. Apareció en dos verbos el mismo día:
+
+```
+armarSecuencia   "0 de 1 fragmentos · FALLARON 1: no apareció en el timeline"   -> estaba en A1
+el colocador     "6 PROBLEMA(S)" y seis "nada en Ns"                            -> estaban en A2
+```
+
+Es el contador ciego de este archivo por tercera vez, en el tercer verbo. Lo que lo vuelve caro no
+es el número mal: es que **el informe queda al revés de la verdad**. Un "no entró" sobre algo que
+entró manda a rehacer trabajo que estaba bien, y si alguien le hace caso y vuelve a colocar,
+duplica.
+
+La regla, que ya no da para más excepciones: **antes de escribir un verificador, preguntarse qué
+hace con un medio que no tiene video.**
+
+## Recorrer bins: un item nulo volteaba la llamada entera
+
+Los recorridos hacían `String(hijos[i].name)` a secas, y un hueco en la lista tiraba
+`Cannot read properties of null` — con eso una tanda entera rebotaba sin colocar nada. Ahora pasan
+por un helper que devuelve `null` en vez de tirar.
+
+**Y los salteados se CUENTAN y se informan**, que es la mitad que importa: un recorrido que se come
+items en silencio contesta "no está" sobre algo que sí estaba. Un `try/catch` mudo habría sido peor
+que el crash.
+
+**Y el chequeo encontró el DOBLE de recorridos de los que había contado a ojo.** Miré el código,
+conté tres, los arreglé, y `test.js` contestó que quedaban tres más. Son seis. Contar a ojo lo que
+se puede contar con un `grep` es el mismo error que ya registró este archivo con los verbos
+camelCase que la regex se perdía.
+
+## El match parcial del proyecto, cuando es AMBIGUO
+
+La guarda `proyecto` compara por subcadena y eso es deliberado: pedir un nombre corto y que enganche
+el largo se usa. Lo que no es deliberado es que el mismo texto pueda referirse a **dos proyectos
+abiertos**: ahí la guarda contestaba que sí sobre el que tiene foco, y el usuario creía estar
+hablando del otro — el escenario para el que la guarda existe, sobreviviendo adentro de la guarda.
+
+Ahora, **si el match es parcial**, se enumeran los abiertos y se rebota cuando coincide con más de
+uno. Sólo cuando es parcial: con el nombre exacto no hay nada que desambiguar y cobrar una llamada
+de más en el caso normal sería un impuesto. Y si no se puede enumerar, **se sigue**: no poder
+averiguar no es estar en peligro.
+
+Probado en las tres direcciones: con uno abierto el parcial pasa, con dos rebota nombrando los dos,
+y el nombre exacto pasa.
+
+## Una comparación en segundos con `>` rechaza el valor que cae EXACTO a medio cuadro
+
+El cuantizador tenía una guarda razonable —"si el redondeo se fue más de medio cuadro, no cuantizo"—
+escrita como `Math.abs(despues - antes) > 0.5 / fps`. Un valor que cae exacto a medio cuadro
+—3,5 s a 25 fps son 87,5 cuadros— da `0.020000000000000018 > 0.02`, que es **true**: la guarda
+rechazaba un redondeo correcto y devolvía el tick sin cuantizar.
+
+Se detectó midiendo, no leyendo: se pidió `duracion: 3.5` y volvió 3,5 en vez de 3,52. Ahora se
+compara **en cuadros** con una tolerancia.
+
+Es la guarda contra el error imaginado rechazando el caso correcto, otra vez, y por punto flotante:
+el mismo `undefined !== undefined` con otro disfraz.
+
+## Un pendiente que no se cierra es peor que no tenerlo
+
+Limpiando la lista de pendientes aparecieron **dos entradas que decían "SIGUE" o "sin hacer" sobre
+trabajo terminado y verificado semanas antes**. En los dos casos el arreglo y su medición vivían en
+otro lado —el encabezado de la herramienta, el commit— y la lista seguía diciendo que no.
+
+Y este archivo le pide a toda sesión que lo lea antes de tocar nada, así que el efecto es concreto:
+alguien evita una herramienta que anda, o vuelve a investigar algo ya medido.
+
+**Un pendiente vencido se lee con la misma confianza que uno cierto**, y no hay forma de
+distinguirlos desde adentro del texto. Al cerrar un trabajo, cerrar también su entrada, en la misma
+tanda. Y cada tanto, cotejar la lista contra el CÓDIGO en vez de contra la memoria: los dos se
+encontraron con un `grep` de "SIGUE|FALTA|sin hacer" y cinco minutos de leer lo que supuestamente
+faltaba.
+
+## Releer lo que ya se tiene es un motivo para crashear
+
+Leer valores de param en volumen es el régimen que tira Premiere, y está documentado. El detonante
+de la última vez vale por lo evitable que era: un barrido de lecturas sobre varias secuencias y
+varias pistas, **para averiguar un dato que ya estaba en la respuesta anterior**.
+
+Antes de barrer para averiguar algo, fijarse si ya se lo tiene. El régimen peligroso no se justifica
+por un dato que uno ya pidió.
 
 ## Cosas que NO se tocan
 

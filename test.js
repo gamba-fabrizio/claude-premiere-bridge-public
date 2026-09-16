@@ -626,11 +626,27 @@ titulo("marcar cuantiza al frame de la secuencia e informa cuanto movio el marca
      * chequeo que matchea su propia explicacion no protege nada. Ya se pago tres
      * veces en este archivo.
      */
-    const cuerpo = m[0].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    const cuerpoMarcar = m[0].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    /*
+     * EL CUANTIZADOR SE MUDO A UN HELPER, asi que el chequeo lo sigue — igual que `PARAMS_DE`
+     * sigue a `ubicarClip`. Y de paso exige que lo usen LOS DOS verbos que mueven un marcador:
+     * `createMoveMarkerAction` tampoco cuantiza (medido: 9,017s a 25fps queda en 9,02), asi que
+     * `editarMarcador` sin esto reintroduce los 121 de 139 subframe en el verbo de al lado.
+     */
+    const mq = srcComandos.match(/async function cuantizarAlFrame[\s\S]*?\n\}/);
+    const cuerpoQ = mq ? mq[0].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "") : "";
+    const cuerpo = cuerpoMarcar + "\n" + cuerpoQ;
+    const me = srcComandos.match(/async function editarMarcador[\s\S]*?\n\}\n/);
+    const usanElHelper = /cuantizarAlFrame\(/.test(cuerpoMarcar) &&
+                         !!me && /cuantizarAlFrame\(/.test(me[0]);
+    if (!usanElHelper) {
+      mal("`marcar` y `editarMarcador` no comparten el cuantizador",
+          "`createMoveMarkerAction` NO cuantiza: sin esto vuelven los marcadores subframe por el verbo nuevo");
+    }
     const leeTimebase = /sequence\.getTimebase\(\)/.test(cuerpo);
     /* La via es aritmetica entera sobre ticks: `alignToNearestFrame` contesta
      * "Illegal Parameter type", ya medido en `cortar`. */
-    const redondea = /Math\.round\(ticks \/ tb\) \* tb/.test(cuerpo);
+    const redondea = /Math\.round\(Number\(tick\.ticks\) \/ tb\) \* tb/.test(cuerpo);
     const informa = /\$\{cuantizado\}/.test(cuerpo);
     const tiempoReal = /en \$\{segundosReales\}s/.test(cuerpo) &&
                        /segundos: segundosReales/.test(cuerpo);
@@ -642,7 +658,7 @@ titulo("marcar cuantiza al frame de la secuencia e informa cuanto movio el marca
      * arma con `despuesSeg`, que existe igual—. Miente de las dos puntas y los
      * cuatro chequeos viejos pasan.
      */
-    const aplica = /\btick = alineado\b/.test(cuerpo);
+    const aplica = /tick:\s*alineado/.test(cuerpo);
     if (!leeTimebase) {
       mal("`marcar` no lee el timebase de la secuencia",
         "sin los ticks por frame no hay con que cuantizar, y un marcador subframe no dice donde " +
@@ -3673,6 +3689,350 @@ titulo("Las transacciones de `colocarLote` se espacian entre lotes");
         "Una espera despues de las transacciones no separa nada.");
     } else {
       ok("`colocarLote` espera entre lotes", m[1] + "ms, dentro del bucle y antes de transaccionar");
+    }
+  }
+}
+
+/* ---------- la guarda contra el BARRIDO de `borrar` ---------- */
+
+/*
+ * Barrer una pista de a un clip tiro Premiere dos veces —176 con solapes, y 8 seguidos— y la
+ * ADVERTENCIA ESCRITA NO ALCANZO: la sesion que provoco la segunda habia leido CLAUDE.md al
+ * empezar. Por eso hay una guarda, y por eso se chequea como se chequean las que importan acá:
+ * POR POSICION y sobre el codigo DESNUDO. Este repo ya tuvo cinco guardas que matchearon su
+ * propia prosa —un comentario, el texto de un mensaje, un literal de string y otro uso legitimo
+ * del mismo token—, y la guarda nueva menciona sus propios identificadores en el comentario que
+ * la explica, asi que buscarlos a secas daria ok con el codigo roto.
+ */
+const cuerpoBorrar = srcComandos.match(/\nasync function borrar\(params\)[\s\S]*?\n\}/);
+if (!cuerpoBorrar) {
+  mal("no se encontró `borrar` para revisar la guarda del barrido");
+} else {
+  // Sin comentarios NI strings: el mensaje del error nombra `borrar` y Delete.
+  const desnudo = cuerpoBorrar[0]
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+
+  const iRebote = desnudo.search(/BORRADOS_RECIENTES\.length\s*>=\s*BORRAR_TOPE/);
+  /*
+   * El `throw` tiene que estar DENTRO del if y ALCANZABLE, no meramente presente: con
+   * `return {}; if (0) throw ...` el texto sigue ahi y un indexOf daria ok sobre una guarda
+   * desarmada. Se recorta el bloque por llaves balanceadas —lo mismo que hubo que hacer con la
+   * guarda del `-1`, cuyo `[^)]*?` no podia atravesar una llamada anidada— y se exige que no
+   * haya un `return` antes del throw.
+   */
+  let bloque = "";
+  if (iRebote !== -1) {
+    const ini = desnudo.indexOf("{", iRebote);
+    if (ini !== -1) {
+      let n = 0;
+      for (let k = ini; k < desnudo.length; k++) {
+        if (desnudo[k] === "{") n++;
+        else if (desnudo[k] === "}") { n--; if (n === 0) { bloque = desnudo.slice(ini, k + 1); break; } }
+      }
+    }
+  }
+  const iThrowB = bloque.indexOf("throw ");
+  const iRetB   = bloque.indexOf("return");
+  const iThrow  = (iThrowB !== -1 && (iRetB === -1 || iRetB > iThrowB)) ? iRebote + 1 : -1;
+  const iProy   = desnudo.indexOf("getProyectoYSecuencia");
+  const iPush   = desnudo.indexOf("BORRADOS_RECIENTES.push");
+  const iContar = desnudo.lastIndexOf("contarItems(sequence)");
+
+  if (iRebote === -1) {
+    mal("`borrar` no tiene la guarda contra el barrido",
+        "barrer una pista de a un clip ya tiró Premiere dos veces");
+  } else if (iThrow === -1 || iThrow < iRebote) {
+    mal("la guarda del barrido de `borrar` no REBOTA", "contar sin rebotar no protege de nada");
+  } else if (!(iProy !== -1 && iRebote < iProy)) {
+    mal("la guarda del barrido corre DESPUÉS de resolver proyecto y secuencia",
+        "una llamada que va a rebotar no tiene que ejecutar ni las comprobaciones");
+  } else if (iPush === -1) {
+    mal("`borrar` nunca anota el borrado", "sin anotar, el contador queda siempre en cero y la guarda no entra jamás");
+  } else if (!(iContar !== -1 && iContar < iPush)) {
+    mal("`borrar` anota el borrado ANTES de confirmarlo",
+        "se cuentan los borrados que SALIERON, no los intentos: contar un rebote castiga un reintento legítimo");
+  } else {
+    ok("la guarda del barrido de `borrar` rebota ANTES de tocar nada y cuenta lo que salió");
+  }
+
+  /*
+   * Y los NUMEROS, porque una guarda demasiado estricta rechaza uso correcto, que es su peor
+   * modo de fallo. Con una ventana corta o un tope de 2, borrar tres clips puntuales rebotaria.
+   */
+  const mVent = srcComandos.match(/const BORRAR_VENTANA_MS\s*=\s*(\d+)/);
+  const mTope = srcComandos.match(/const BORRAR_TOPE\s*=\s*(\d+)/);
+  if (!mVent || !mTope) {
+    mal("la guarda del barrido no declara su ventana y su tope como constantes");
+  } else if (Number(mTope[1]) < 4) {
+    mal(`el tope del barrido es ${mTope[1]}`, "borrar tres o cuatro clips puntuales es uso legítimo y rebotaría");
+  } else if (Number(mVent[1]) < 30000) {
+    mal(`la ventana del barrido es ${mVent[1]}ms`, "tan corta no distingue una ráfaga de trabajo espaciado");
+  } else {
+    ok(`la guarda del barrido deja pasar el trabajo fino (${mTope[1]} en ${Number(mVent[1]) / 1000}s)`);
+  }
+}
+
+/* ---------- `marcadores` devuelve la DURACIÓN ---------- */
+
+/*
+ * `marcar` acepta `duracion` y el rango entra, pero `marcadores` no lo devolvia: el bridge no
+ * podia releer lo que acababa de escribir, y los 26 marcadores de seccion del FIUBATON hubo que
+ * verificarlos abriendo el `.prproj`. Se exige ademas que un fallo de lectura NO caiga a 0,
+ * porque 0 es un marcador de PUNTO: tragarse la excepcion informaria "no tiene rango" sobre uno
+ * que si lo tiene.
+ */
+const cuerpoMarcadores = srcComandos.match(/async function marcadores[\s\S]*?\n\}\n/);
+if (!cuerpoMarcadores) {
+  mal("no se encontró `marcadores` para revisarlo");
+} else {
+  const cm = cuerpoMarcadores[0];
+  const sinCm = cm.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const lee = /getDuration\(\)/.test(sinCm);
+  const devuelve = /\bduracion:/.test(sinCm);
+  const cae = /catch[^}]*\bdur\s*=\s*0/.test(sinCm);
+  const enResumen = /m\.duracion/.test(sinCm.slice(sinCm.indexOf("resumen")));
+  if (!lee) {
+    mal("`marcadores` no lee la duración", "`marcar` escribe un rango que nada puede releer");
+  } else if (!devuelve) {
+    mal("`marcadores` lee la duración y no la devuelve");
+  } else if (cae) {
+    mal("`marcadores` devuelve 0 cuando NO PUDO leer la duración",
+        "0 es un marcador de PUNTO: informaría 'no tiene rango' sobre uno que sí lo tiene");
+  } else if (!enResumen) {
+    mal("la duración no aparece en el RESUMEN",
+        "un dato que está en la respuesta y no en el resumen es un dato que no está");
+  } else {
+    ok("`marcadores` devuelve la duración, no la asume 0 al fallar, y la pone en el resumen");
+  }
+}
+
+
+/* ---------- el contador ciego con medios SIN VIDEO ---------- */
+
+/*
+ * Un .wav no pone nada en la pista de video, asi que un verificador que cuenta items de V1
+ * informa "no aparecio en el timeline" sobre un clip que entro perfecto en A1. Paso el
+ * 2026-09-16 en los DOS a la vez: `armarSecuencia` dijo "0 de 1 fragmentos · FALLARON 1" y
+ * `colocar_fragmentos` cerro con "6 PROBLEMA(S)" sobre seis locuciones bien puestas. Es el
+ * contador ciego de `cortesDeEscena` —que hizo correr el analisis cuatro veces— y el que
+ * `insertar` ya habia pagado con el .wav del tema. Un informe al reves de la verdad es el peor
+ * modo de fallo de una verificacion: manda a rehacer trabajo que estaba bien.
+ */
+const cuerpoArmar2 = srcComandos.match(/async function armarSecuencia[\s\S]*?\n\}/);
+if (!cuerpoArmar2) {
+  mal("no se encontró `armarSecuencia` para revisar su contador");
+} else {
+  const c = cuerpoArmar2[0].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const iFalla = c.indexOf("no apareció");
+  const trozo = iFalla === -1 ? c : c.slice(0, iFalla);
+  if (iFalla === -1) {
+    ok("`armarSecuencia` ya no declara un fragmento perdido por el conteo de video");
+  } else if (!/getAudioTrack\(0\)/.test(trozo)) {
+    mal("`armarSecuencia` decide que un fragmento no entró mirando SÓLO la pista de video",
+        "un .wav no pone nada en V1: informaría fracaso sobre un clip que entró en A1");
+  } else {
+    ok("`armarSecuencia` mira video Y audio antes de declarar que un fragmento no entró");
+  }
+}
+
+const srcColocar = fs.readFileSync(path.join(__dirname, "herramientas", "colocar_fragmentos.js"), "utf8");
+{
+  const c = srcColocar.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const iRel = c.indexOf("relectura");
+  const antes = iRel === -1 ? c : c.slice(0, iRel);
+  const leeV = /pista:\s*"V"\s*\+\s*PISTA/.test(antes);
+  const leeA = /pista:\s*"A"\s*\+\s*PISTA_AUDIO/.test(antes);
+  if (!leeV) {
+    mal("`colocar_fragmentos` no relee la pista de video al final");
+  } else if (!leeA) {
+    mal("la relectura final de `colocar_fragmentos` mira SÓLO la pista de video",
+        "con locuciones .wav informó «6 PROBLEMA(S)» sobre seis clips que estaban perfectos en A2");
+  } else {
+    ok("la relectura final de `colocar_fragmentos` junta la pista de video y la de audio");
+  }
+}
+
+
+/* ---------- la pantalla bloqueada, cuarta causa de "el macro no anduvo" ---------- */
+
+/*
+ * Con el login screen puesto KM no inyecta teclas: el macro corre, no tira error, y la app no se
+ * entera. El 2026-09-16 costo TRES intentos y dos esperas de 60s culpando al macro y al cartel.
+ * Se exige que la guarda este ANTES del disparo —esperar 60s para averiguar algo que se lee en
+ * un comando es desperdicio, y ademas deja el transporte trabado— y que NO bloquee cuando no
+ * pudo averiguar, porque rechazar uso correcto es el peor modo de fallo de una guarda.
+ */
+const srcRecargar = fs.readFileSync(path.join(__dirname, "herramientas", "recargar.js"), "utf8");
+{
+  const c = srcRecargar.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const iGuarda = c.indexOf("exigirPantallaDesbloqueada(");
+  const iMacro = c.search(/do script[^\n]*MACRO_CERRAR/);
+  const leeIoreg = /CGSSessionScreenIsLocked/.test(c);
+  // El catch tiene que devolver false (seguir), no true (frenar): no poder averiguar no es estar bloqueado.
+  const cuerpo = c.match(/function pantallaBloqueada\(\)[\s\S]*?\n\}/);
+  const noFrenaSinSaber = cuerpo ? /catch\s*\([^)]*\)\s*\{\s*return false;/.test(cuerpo[0]) : false;
+  if (!leeIoreg) {
+    mal("`recargar.js` no detecta la pantalla bloqueada",
+        "es la cuarta causa de que el macro no cierre Premiere, y se lee en un comando");
+  } else if (iGuarda === -1 || iMacro === -1 || iGuarda > iMacro) {
+    mal("la guarda de pantalla bloqueada no corre ANTES de disparar el Cmd+Q",
+        "averiguarlo despues cuesta 60s de espera y deja el transporte trabado");
+  } else if (!noFrenaSinSaber) {
+    mal("`pantallaBloqueada` frena cuando NO PUDO averiguar",
+        "rechazar uso correcto es el peor modo de fallo de una guarda");
+  } else {
+    ok("`recargar.js` detecta la pantalla bloqueada antes de disparar, y no frena si no puede saberlo");
+  }
+}
+
+
+/* ---------- `escalaFija` tiene tope, y ya no es el unico sin el ---------- */
+
+/*
+ * Era el UNICO verbo de escala sin tope, con el argumento de que "haria falta una pista de 200+
+ * clips para acercarse al peligro". Ese numero salio de material vertical de 1080x1920; 32 clips
+ * de 3840x2160 a 50fps lo mataron —600s sin contestar, panel sin latir, sin dump—. La variable es
+ * el PESO del material, asi que no se busco "el numero": se le puso la valvula que ya tienen los
+ * otros tres. Y se exige que el resumen GRITE cuando quedo a medias: procesar media pista sin que
+ * nadie se entere seria el modo de fallo que este cambio podria introducir.
+ */
+{
+  const c = (srcComandos.match(/async function escalaFija[\s\S]*?\n\}/) || [""])[0]
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const tieneLimite = /params\.limite/.test(c);
+  const tieneDesde = /params\.desdeIndice/.test(c);
+  const tieneSiguiente = /siguiente:/.test(c);
+  const avisa = /PARCIAL/.test(c);
+  if (!tieneLimite || !tieneDesde) {
+    mal("`escalaFija` sigue barriendo la pista entera sin tope",
+        "32 clips de 4K a 50fps mataron Premiere donde 35 verticales pasaron: la variable es el peso");
+  } else if (!tieneSiguiente) {
+    mal("`escalaFija` corta la tanda y no dice por dónde seguir",
+        "sin `siguiente` la continuación hay que calcularla, y el que no la calcule deja media pista sin escalar");
+  } else if (!avisa) {
+    mal("`escalaFija` puede quedar a medias sin decirlo en el resumen",
+        "quien escala una pista espera la pista entera: un parcial silencioso es peor que el riesgo que evita");
+  } else {
+    ok("`escalaFija` tiene limite, desdeIndice y siguiente, y grita cuando queda a medias");
+  }
+}
+
+
+/* ---------- recorrer bins sin morirse por un item nulo ---------- */
+
+/*
+ * `importar` se cayo con "Cannot read properties of null (reading 'name')" sobre 318 medios en 4
+ * bins y la tanda entera rebo­to. Los tres recorridos hacian `String(hijos[i].name)` a secas.
+ *
+ * Se exigen las DOS mitades: que no se mueran, y que CUENTEN lo salteado. Saltear en silencio
+ * convierte un recorrido en un falso negativo —"no esta" sobre algo que si estaba— que es el modo
+ * de fallo que este repo ya pago con las transiciones, los clips muteados y los efectos del
+ * master. Un `try/catch` que sigue de largo sin decir nada seria peor que el crash.
+ */
+{
+  const c = srcComandos.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const crudos = (c.match(/String\(hijos\[i\]\.name\)/g) || []).length;
+  const tieneHelper = /function nombreDeItem\(/.test(c);
+  const usos = (c.match(/nombreDeItem\(hijos\[i\]\)/g) || []).length;
+  const informan = (c.match(/saltados \?/g) || []).length;
+  if (!tieneHelper) {
+    mal("no existe `nombreDeItem`", "un item nulo en la lista de un bin voltea la llamada entera");
+  } else if (crudos) {
+    mal(`quedan ${crudos} recorrido(s) leyendo \`hijos[i].name\` a secas`,
+        "es exactamente lo que tiro `importar` sobre 318 medios en 4 bins");
+  } else if (usos < 6) {
+    mal(`solo ${usos} de los 6 recorridos de bins usa \`nombreDeItem\``,
+        "los conte a ojo y eran 3; el chequeo encontro otros 3 — por eso se cuenta y no se confia");
+  } else if (informan < 6) {
+    mal(`solo ${informan} de los 6 recorridos informa los items salteados`,
+        "saltear en silencio convierte el recorrido en un falso negativo: «no esta» sobre algo que si estaba");
+  } else {
+    ok("los 6 recorridos de bins toleran un item nulo Y dicen cuantos saltearon");
+  }
+}
+
+
+/* ---------- la guarda `proyecto` y el parcial AMBIGUO ---------- */
+
+/*
+ * El match por subcadena es deliberado —pedir el nombre corto y que enganche el largo se usa—
+ * asi que sacarlo romperia llamadas correctas. Lo que quedaba abierto es que el mismo
+ * texto pueda referirse a DOS proyectos abiertos: ahi la guarda contestaba que si sobre el que
+ * tiene foco, que es el escenario para el que la guarda existe sobreviviendo adentro de ella.
+ *
+ * Se exige que la desambiguacion corra SOLO cuando el match es parcial —si coincide exacto no hay
+ * nada que preguntar, y cobrar una llamada de mas en el caso normal seria un impuesto— y que NO
+ * frene cuando no pudo enumerar: no poder averiguar no es estar en peligro.
+ */
+{
+  const c = srcComandos.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const iGuarda = c.indexOf('typeof p.proyecto === "string"');
+  const trozo = iGuarda === -1 ? "" : c.slice(iGuarda, iGuarda + 4000);
+  const desambigua = /coinciden\.length > 1/.test(trozo);
+  const soloParcial = /nom\.toLowerCase\(\) !== p\.proyecto\.toLowerCase\(\)/.test(trozo);
+  const noFrenaSinSaber = /catch \([^)]*\) \{ abiertos = \[\]; \}/.test(trozo);
+  if (iGuarda === -1) {
+    mal("no se encontró la guarda `proyecto` en el despachador");
+  } else if (!desambigua) {
+    mal("la guarda `proyecto` acepta un parcial que coincide con varios proyectos abiertos",
+        "contesta que sí sobre el que tiene foco, que es justo la confusión que la guarda existe para evitar");
+  } else if (!soloParcial) {
+    mal("la desambiguación corre también cuando el nombre coincide EXACTO",
+        "ahí no hay nada que preguntar: es una llamada de más en el caso normal");
+  } else if (!noFrenaSinSaber) {
+    mal("la guarda frena cuando no pudo enumerar los proyectos abiertos",
+        "no poder averiguar no es estar en peligro; rechazar uso correcto es el peor modo de fallo de una guarda");
+  } else {
+    ok("la guarda `proyecto` rebota si el parcial es ambiguo, sólo cuando es parcial, y no frena a ciegas");
+  }
+}
+
+
+/* ---------- `nombreDeItem` con el CONTROL POSITIVO ---------- */
+
+/*
+ * El resto de los chequeos de este archivo miran el codigo. Este EJECUTA la funcion, porque una
+ * guarda contra nulos que nunca vio un nulo no esta probada — es la regla de este repo para los
+ * lectores nuevos, aplicada a una funcion de tres lineas.
+ *
+ * No hace falta Premiere: es pura y no toca la API. Se la extrae del fuente y se la evalua.
+ */
+{
+  const m = srcComandos.match(/function nombreDeItem\(it\) \{[\s\S]*?\n\}/);
+  if (!m) {
+    mal("no se encontró `nombreDeItem` para ejercitarla");
+  } else {
+    let fn = null;
+    try { fn = eval("(" + m[0].replace(/^function nombreDeItem/, "function") + ")"); }
+    catch (e) { fn = null; }
+    if (!fn) {
+      mal("`nombreDeItem` no se pudo evaluar", "el chequeo la ejecuta, no la lee");
+    } else {
+      const casos = [
+        ["null", null, null],
+        ["undefined", undefined, null],
+        ["objeto sin name", {}, null],
+        ["name null", { name: null }, null],
+        ["getter que tira", { get name() { throw new Error("boom"); } }, null],
+        // Y el POSITIVO, que es la mitad que prueba que no devuelve null para todo:
+        ["item normal", { name: "un_clip.mp4" }, "un_clip.mp4"],
+        ["name no-string", { name: 42 }, "42"]
+      ];
+      const fallan = [];
+      for (const [comoSeLlama, entrada, esperado] of casos) {
+        let r;
+        try { r = fn(entrada); } catch (e) { r = "TIRÓ: " + e.message; }
+        if (r !== esperado) fallan.push(`${comoSeLlama}: dio ${JSON.stringify(r)} y se esperaba ${JSON.stringify(esperado)}`);
+      }
+      if (fallan.length) {
+        mal("`nombreDeItem` no maneja todos los casos: " + fallan.join(" · "));
+      } else {
+        ok(`\`nombreDeItem\` pasa los ${casos.length} casos, incluido el positivo (un item normal SÍ devuelve su nombre)`);
+      }
     }
   }
 }

@@ -2333,16 +2333,18 @@ async function buscarMedio(project, nombre) {
   const raiz = await project.getRootItem();
   const vistos = [];
   let encontrado = null;
+  let saltados = 0;
   const recorrer = async (carpeta, prof) => {
     if (encontrado || prof > 8) return;
     const hijos = await hijosDe(carpeta);
     if (!hijos) return;
     for (let i = 0; i < hijos.length && !encontrado; i++) {
+      const n0 = nombreDeItem(hijos[i]);
+      if (n0 === null) { saltados++; continue; }
       const sub = await hijosDe(hijos[i]);
       if (sub === null) {
-        const n = String(hijos[i].name);
-        vistos.push(n);
-        if (contieneN(n, nombre)) encontrado = hijos[i];
+        vistos.push(n0);
+        if (contieneN(n0, nombre)) encontrado = hijos[i];
       } else await recorrer(hijos[i], prof + 1);
     }
   };
@@ -2350,7 +2352,9 @@ async function buscarMedio(project, nombre) {
   if (!encontrado) {
     throw new Error(
       `No hay ningún medio que coincida con "${nombre}". Hay: ` +
-      (vistos.slice(0, 25).join(", ") || "nada") + (vistos.length > 25 ? ` y ${vistos.length - 25} más` : "")
+      (vistos.slice(0, 25).join(", ") || "nada") + (vistos.length > 25 ? ` y ${vistos.length - 25} más` : "") +
+      (saltados ? ` · OJO: ${saltados} item(s) del panel no se pudieron leer y se saltearon, asi que este "no esta" puede ser un falso negativo` : "") +
+      ""
     );
   }
   return encontrado;
@@ -2519,12 +2523,27 @@ async function armarSecuencia(params) {
       continue;
     }
 
-    // Dónde terminó DE VERDAD, releído: el cursor calculado se desfasa por el
-    // redondeo a frames y esos milisegundos acumulados dejan huecos.
-    const track = await nueva.getVideoTrack(0);
-    const items = await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false);
-    if (items.length <= puestos.length) {
-      fallidos.push(`${i + 1} (${m.nombre} ${f.desde}-${f.hasta}s): la transacción no tiró pero no apareció en el timeline`);
+    /*
+     * Dónde terminó DE VERDAD, releído: el cursor calculado se desfasa por el redondeo a frames
+     * y esos milisegundos acumulados dejan huecos.
+     *
+     * Y se miran LAS DOS PISTAS, no sólo V1. Esto contaba los items de la pista de VIDEO, así
+     * que con un medio SIN VIDEO —un .wav— informaba "la transacción no tiró pero no apareció en
+     * el timeline" sobre un clip que había entrado perfecto en A1. Pasó el 2026-09-16 armando la
+     * secuencia del video 3: el verbo dijo "0 de 1 fragmentos · FALLARON 1" y el wav estaba ahí.
+     * Es el contador ciego de `cortesDeEscena` —y el que `insertar` ya pagó con el .wav del
+     * tema— cometido una tercera vez, en otro verbo.
+     */
+    const trackV = await nueva.getVideoTrack(0);
+    const trackA = await nueva.getAudioTrack(0);
+    const itemsV = trackV ? await trackV.getTrackItems(ppro.Constants.TrackItemType.CLIP, false) : [];
+    const itemsA = trackA ? await trackA.getTrackItems(ppro.Constants.TrackItemType.CLIP, false) : [];
+    // `puestos.length` es cuántos fragmentos entraron: cada uno deja un item en SU pista.
+    const items = itemsV.length > puestos.length ? itemsV
+                : itemsA.length > puestos.length ? itemsA : null;
+    if (!items) {
+      fallidos.push(`${i + 1} (${m.nombre} ${f.desde}-${f.hasta}s): la transacción no tiró pero no apareció ` +
+        `en el timeline (ni en V1 ni en A1: V1 tiene ${itemsV.length} y A1 ${itemsA.length})`);
       continue;
     }
     let fin = 0;
@@ -3142,13 +3161,15 @@ async function medios(params) {
 
   const busca = typeof params.buscar === "string" ? params.buscar.toLowerCase() : null;
   const encontrados = [];
+  let saltados = 0;
 
   async function recorrer(item, ruta, profundidad) {
     if (profundidad > 8) return;
     const hijos = await hijosDe(item);
     if (!hijos) return;
     for (let i = 0; i < hijos.length; i++) {
-      const nombre = String(hijos[i].name);
+      const nombre = nombreDeItem(hijos[i]);
+      if (nombre === null) { saltados++; continue; }
       const subHijos = await hijosDe(hijos[i]);
       const esCarpeta = subHijos !== null;
       if (!esCarpeta && (!busca || nombre.toLowerCase().indexOf(busca) !== -1)) {
@@ -3191,8 +3212,10 @@ async function medios(params) {
     resumen:
       `${encontrados.length} medios` + (busca ? ` con "${params.buscar}"` : " en el proyecto") +
       (encontrados.length > TOPE ? ` · se muestran los primeros ${TOPE}, filtrá con "buscar"` : "") +
-      (recortada.length ? " · " + recortada.map((m) => `"${m.nombre}"`).join(", ") : ""),
+      (recortada.length ? " · " + recortada.map((m) => `"${m.nombre}"`).join(", ") : "") +
+      (saltados ? ` · OJO: ${saltados} item(s) no se pudieron leer y se saltearon` : ""),
     total: encontrados.length,
+    saltados: saltados,
     medios: recortada
   };
 }
@@ -3217,12 +3240,14 @@ async function insertar(params) {
 
   let item = null;
   const vistos = [];
+  let saltados = 0;
   async function buscar(carpeta, profundidad) {
     if (item || profundidad > 8) return;
     const hijos = await hijosDe(carpeta);
     if (!hijos) return;
     for (let i = 0; i < hijos.length && !item; i++) {
-      const n = String(hijos[i].name);
+      const n = nombreDeItem(hijos[i]);
+      if (n === null) { saltados++; continue; }
       const subHijos = await hijosDe(hijos[i]);
       if (subHijos === null) {
         vistos.push(n);
@@ -3237,7 +3262,9 @@ async function insertar(params) {
   if (!item) {
     throw new Error(
       `No hay ningún medio que coincida con "${nombre}" en el proyecto. Hay: ` +
-      (vistos.slice(0, 25).join(", ") || "nada") + (vistos.length > 25 ? ` … y ${vistos.length - 25} más` : "")
+      (vistos.slice(0, 25).join(", ") || "nada") + (vistos.length > 25 ? ` … y ${vistos.length - 25} más` : "") +
+      (saltados ? ` · OJO: ${saltados} item(s) del panel no se pudieron leer y se saltearon, asi que este "no esta" puede ser un falso negativo` : "") +
+      ""
     );
   }
 
@@ -3582,6 +3609,33 @@ async function contarItems(sequence) {
   return { video: video, audio: audio, total: video + audio };
 }
 
+/*
+ * LA GUARDA CONTRA EL BARRIDO, y por qué es una guarda y no un párrafo más.
+ *
+ * Barrer una pista con `borrar` de a un clip tiró Premiere DOS VECES: 176 clips con 119 solapes
+ * el 2026-08-22, y 8 seguidos espaciados ~1,3s el 2026-09-16. CLAUDE.md lo tenía escrito desde
+ * la primera, y **la sesión que provocó la segunda había leído ese archivo al empezar**. O sea
+ * que lo que faltaba no era documentación: era algo que rebotara.
+ *
+ * Vive en el PANEL y no en la herramienta MCP a propósito. Las herramientas de este repo llaman
+ * por el transporte directo y saltean las MCP — está escrito para `pistaAudio` y para `proyecto`,
+ * y se pagó las dos veces. Acá abajo es el único punto por el que pasan los dos caminos.
+ *
+ * LOS NÚMEROS, y por qué no son los que proponía CLAUDE.md. Ahí decía "a partir de la 3ra en,
+ * digamos, 30s", con el "digamos" marcando que no estaban medidos. Lo que SÍ está medido es el
+ * daño: ráfagas de 8 y de 176. Con 3-en-30s, borrar cuatro clips puntuales a lo largo de medio
+ * minuto —uso legítimo y nada raro— rebotaría, y **rechazar lo correcto es el peor modo de fallo
+ * de una guarda**: es la regla de este mismo repo, que ya se pagó con la de params y con la de
+ * KM. 5 en 60s deja pasar el trabajo fino y agarra cualquier barrido, que nunca es de cuatro.
+ *
+ * Se cuentan los borrados que SALIERON, no los intentos: un `borrar` que rebota por parámetros
+ * no ejecuta ninguna transacción y no estresa nada, así que contarlo sólo serviría para castigar
+ * un reintento legítimo.
+ */
+const BORRADOS_RECIENTES = [];
+const BORRAR_VENTANA_MS = 60000;
+const BORRAR_TOPE = 5;
+
 /**
  * Saca un clip del timeline.
  *
@@ -3594,6 +3648,26 @@ async function contarItems(sequence) {
  * sorprende, igual que overwrite en `insertar`.
  */
 async function borrar(params) {
+  /*
+   * ANTES QUE NADA, incluso antes de resolver el proyecto: una llamada que va a rebotar no tiene
+   * que ejecutar ni las comprobaciones. Es el mismo orden que la tabla de params y el prevuelo.
+   */
+  const ahoraMs = Date.now();
+  while (BORRADOS_RECIENTES.length && ahoraMs - BORRADOS_RECIENTES[0] > BORRAR_VENTANA_MS) {
+    BORRADOS_RECIENTES.shift();
+  }
+  if (BORRADOS_RECIENTES.length >= BORRAR_TOPE) {
+    const van = Math.round((ahoraMs - BORRADOS_RECIENTES[0]) / 1000);
+    const libre = Math.ceil((BORRAR_VENTANA_MS - (ahoraMs - BORRADOS_RECIENTES[0])) / 1000);
+    throw new Error(
+      `RÁFAGA DE BORRADOS: van ${BORRADOS_RECIENTES.length} en ${van}s y NO se ejecutó nada. ` +
+      "Vaciar una pista se hace SELECCIONÁNDOLA Y APRETANDO DELETE: es nativo, instantáneo y sin " +
+      "riesgo. `borrar` es para clips puntuales — barrer de a uno ya tiró Premiere dos veces " +
+      "(176 clips con solapes, y 8 seguidos). " +
+      `La ventana se libera sola en ${libre}s.`
+    );
+  }
+
   const { project, sequence } = await getProyectoYSecuencia();
   const encontrado = await ubicarClip(sequence, params);
   // El track viene resuelto de ubicarClip: puede ser de video o de audio, y
@@ -3722,6 +3796,12 @@ async function borrar(params) {
   // que uno esperaba, no lo que pasó.
   const totalDespues = await contarItems(sequence);
   const audioSuelto = totalDespues.audio === totalAntes.audio && totalAntes.audio > 0;
+
+  /*
+   * Recién ACÁ se anota, con el borrado ya confirmado por el conteo. Ver el bloque de
+   * BORRADOS_RECIENTES: se cuenta lo que salió, no lo que se intentó.
+   */
+  BORRADOS_RECIENTES.push(Date.now());
 
   return {
     resumen:
@@ -6266,6 +6346,16 @@ async function ponerAjustes(project, sequence, params) {
        * type", o sea que ni el tipo era el esperado.
        */
       const formas = [
+        /*
+         * ESTA es la que entra: el valor va como objeto `FrameRate`, no como numero ni como
+         * {value}. Las tres que se probaban eran justamente las que NO andan. Verificado con
+         * CONTROL: la secuencia tocada paso de 29,98 a 25fps y otra del mismo proyecto, sin
+         * tocar, siguio en 29,96. Va PRIMERA para no reintentar a ciegas en cada llamada.
+         */
+        ["FrameRate.createWithValue(fps)", () => {
+          if (!ppro.FrameRate || typeof ppro.FrameRate.createWithValue !== "function") return null;
+          return ppro.FrameRate.createWithValue(fps);
+        }],
         ["el objeto del getter con .value cambiado", async () => {
           const a = await leerAjustes(sequence);
           if (!a.crudoFrameRate || typeof a.crudoFrameRate.value !== "number") return null;
@@ -6464,6 +6554,41 @@ async function escalaFija(params) {
     );
   }
 
+
+  /*
+   * TOPE Y CONTINUACION, que era el pendiente: este era el UNICO verbo de escala sin tope.
+   *
+   * El argumento escrito para no ponerselo fue que a la escala real hace "20 a 90 lecturas" y que
+   * "haria falta una pista de 200+ clips para acercarse al peligro". **Ese numero se midio sobre
+   * otro material**: 35 clips verticales de 1080x1920 pasaron, y 32 de 3840x2160 a 50fps MATARON
+   * Premiere —600s sin contestar, panel sin latir, sin dump—. La variable es el PESO del
+   * material, no el conteo, asi que ninguna cota fija en clips es correcta para todos los casos.
+   *
+   * VA DESPUES DE SACAR LAS CAPAS DE AJUSTE, y el orden importa: al reves, `totalClips` las
+   * contaba y el resumen decia "2 de 4" sobre una pista con 3 clips escalables — dos listas
+   * distintas en la misma frase. Filtrar primero cuesta una llamada por clip (`isAdjustmentLayer`,
+   * que NO es una lectura de valor de param, o sea fuera del regimen peligroso) y deja `siguiente`
+   * indexando la misma lista que se escala.
+   *
+   * Por eso no se busco "el numero": se le puso la misma valvula que ya tienen `leerEscalas`,
+   * `aplicarZooms` y `aplicarAnim` —`limite` + `siguiente`— que acota la exposicion sin depender
+   * de acertar una cota. El default de 30 esta debajo de los 32 que mataron Premiere.
+   *
+   * Y el resumen GRITA cuando quedo a medias. Procesar una parte de la pista y que nadie se entere
+   * es el modo de fallo que habria que evitar al agregar esto: quien escala una pista espera la
+   * pista entera.
+   */
+  const desdeIndice = typeof params.desdeIndice === "number" ? params.desdeIndice : 0;
+  const limite = typeof params.limite === "number" ? params.limite : 30;
+  const totalClips = clips.length;
+  const hasta = Math.min(totalClips, desdeIndice + limite);
+  const parcial = desdeIndice > 0 || hasta < totalClips;
+  clips.splice(0, desdeIndice);
+  clips.splice(hasta - desdeIndice);
+  if (!clips.length) {
+    throw new Error(`\`desdeIndice\` ${desdeIndice} está fuera de rango: hay ${totalClips} clips escalables.`);
+  }
+
   const hechos = [], fallidos = [];
   let via = null;
   const intentos = [];
@@ -6517,6 +6642,12 @@ async function escalaFija(params) {
   return {
     resumen:
       `Escala ${valor} en ${hechos.length} de ${clips.length} clips` +
+      (parcial
+        ? ` · PARCIAL: son ${desdeIndice}–${hasta} de ${totalClips}. ` +
+          (hasta < totalClips
+            ? `FALTAN ${totalClips - hasta}: seguí con desdeIndice ${hasta}`
+            : "este era el último tramo")
+        : "") +
       (via ? ` · vía ${via}` : "") +
       (salteadas.length
         ? ` · SALTEADA(S) ${salteadas.length} capa(s) de ajuste (${salteadas.join(", ")}): escalarlas dejaría la corrección en un rectángulo`
@@ -6524,6 +6655,8 @@ async function escalaFija(params) {
       (fallidos.length ? ` · FALLARON ${fallidos.length}: ${fallidos.slice(0, 3).join(" | ")}` : "") +
       (!via && intentos.length ? ` · intentos: ${intentos.slice(0, 4).join(" | ")}` : ""),
     valor: valor, hechos: hechos.length, total: clips.length, via: via,
+    siguiente: hasta < totalClips ? hasta : null,
+    totalClips: totalClips, desdeIndice: desdeIndice, parcial: parcial,
     fallidos: fallidos, capasDeAjusteSalteadas: salteadas
   };
 }
@@ -7496,12 +7629,15 @@ async function duplicarSecuencia(params) {
     try {
       const raiz = await project.getRootItem();
       let item = null;
+      let saltados = 0;
       const buscar = async (carpeta, prof) => {
         if (item || prof > 8) return;
         const hijos = await hijosDe(carpeta);
         if (!hijos) return;
         for (let i = 0; i < hijos.length && !item; i++) {
-          if (String(hijos[i].name) === nuevos[0].nombre) { item = hijos[i]; return; }
+          const n0 = nombreDeItem(hijos[i]);
+          if (n0 === null) { saltados++; continue; }
+          if (n0 === nuevos[0].nombre) { item = hijos[i]; return; }
           await buscar(hijos[i], prof + 1);
         }
       };
@@ -7528,7 +7664,8 @@ async function duplicarSecuencia(params) {
     resumen:
       `Duplicada "${nombreOrigen}": ${antes} → ${despues.length} secuencias · ` +
       `la copia se llama "${renombrada || (nuevos[0] ? nuevos[0].nombre : "?")}" · vía ${via}` +
-      (fallaRenombre ? ` · NO SE PUDO RENOMBRAR: ${fallaRenombre}` : ""),
+      (fallaRenombre ? ` · NO SE PUDO RENOMBRAR: ${fallaRenombre}` : "") +
+      (saltados ? ` · OJO: ${saltados} item(s) del panel no se pudieron leer y se saltearon` : ""),
     origen: nombreOrigen,
     copia: renombrada || (nuevos[0] ? nuevos[0].nombre : null),
     secuencias: listaFinal
@@ -7540,7 +7677,15 @@ async function duplicarSecuencia(params) {
 /** Los marcadores de la secuencia activa, con su tiempo y su comentario. */
 async function marcadores(params) {
   const { sequence } = await getProyectoYSecuencia();
-  const col = await ppro.Markers.getMarkers(sequence);
+  /*
+   * Lee los de la SECUENCIA o los de un CLIP, con el mismo direccionamiento que los otros dos.
+   *
+   * Sin esto, `marcar` sobre un clip habria sido write-only: se podrian poner marcadores de
+   * material y no releerlos — el mismo agujero que este archivo acaba de cerrar con la duracion,
+   * reintroducido en la misma tanda. Los tres verbos comparten `sujetoDeMarcadores` por eso.
+   */
+  const objetivo = await sujetoDeMarcadores(sequence, params);
+  const col = await ppro.Markers.getMarkers(objetivo.sujeto);
   const lista = await col.getMarkers();
 
   const salida = [];
@@ -7548,9 +7693,27 @@ async function marcadores(params) {
     const m = lista[i];
     let seg = null;
     try { seg = Number(aSegundos(await m.getStart()).toFixed(3)); } catch (e) { seg = null; }
+    /*
+     * LA DURACIÓN, que es lo que hacía que `marcar` escribiera a ciegas.
+     *
+     * `marcar` acepta `duracion` y el rango ENTRA, pero este verbo no lo devolvía, así que el
+     * bridge no podía releer lo que acababa de escribir: el "el veredicto sale del ESTADO" de
+     * CLAUDE.md sin estado que leer. Los 26 marcadores de sección del FIUBATÓN hubo que
+     * verificarlos abriendo el `.prproj`, donde el campo SÍ está (`mDuration`).
+     *
+     * Y el error se guarda aparte en vez de caer a 0: **0 es un marcador de PUNTO**, una
+     * respuesta legítima y distinta de "no pude leerlo". Tragarse la excepción devolviendo 0
+     * informaría "no tiene rango" sobre un marcador que sí lo tiene — el mismo lado por el que
+     * se pagó el cuadro negro de la pista muteada.
+     */
+    let dur = null, durError = null;
+    try { dur = Number(aSegundos(await m.getDuration()).toFixed(3)); }
+    catch (e) { durError = String((e && e.message) || e); }
     const indice = await m.getColorIndex();
     salida.push({
       segundos: seg,
+      duracion: dur,
+      ...(durError ? { duracionError: durError } : {}),
       nombre: String(await m.getName()),
       comentario: String(await m.getComments() || ""),
       color: indice,
@@ -7559,13 +7722,25 @@ async function marcadores(params) {
   }
   salida.sort((a, b) => (a.segundos || 0) - (b.segundos || 0));
 
+  /*
+   * El RANGO va en el resumen, no sólo en el dato: es lo único que se lee, y este verbo existe
+   * ahora justamente para poder verificar lo que `marcar` escribió. Un marcador de punto (0) se
+   * imprime sin el `+`, para que el `+` signifique rango y no ruido.
+   */
+  const sinLeer = salida.filter((m) => m.duracionError).length;
   return {
     resumen:
       salida.length
-        ? `${salida.length} marcadores en "${sequence.name}": ` +
-          salida.map((m) => `${m.segundos}s [${m.colorNombre}] "${m.nombre}"`).join(" · ")
-        : `"${sequence.name}" no tiene marcadores.`,
+        ? `${salida.length} marcadores en ${objetivo.dondeEsta}: ` +
+          salida.map((m) =>
+            `${m.segundos}s${m.duracion ? ` +${m.duracion}` : ""} [${m.colorNombre}] "${m.nombre}"`
+          ).join(" · ") +
+          (sinLeer ? ` · OJO: en ${sinLeer} NO se pudo leer la duración (ver duracionError); ` +
+                     "0 sería un marcador de PUNTO, así que no se asume" : "")
+        : `${objetivo.dondeEsta} no tiene marcadores.`,
     secuencia: sequence.name,
+    enClip: objetivo.esClip,
+    donde: objetivo.dondeEsta,
     marcadores: salida
   };
 }
@@ -7586,6 +7761,7 @@ async function marcar(params) {
   const { project, sequence } = await getProyectoYSecuencia();
 
   if (typeof params.segundos !== "number") throw new Error("Falta `segundos`: dónde va el marcador.");
+  const objetivo = await sujetoDeMarcadores(sequence, params);
   const nombre = String(params.nombre || "Nota");
   const comentario = String(params.comentario || "");
   /*
@@ -7606,34 +7782,13 @@ async function marcar(params) {
    * La via es aritmetica entera sobre ticks con `getTimebase()`, que son ticks por frame.
    * `alignToNearestFrame` contesta "Illegal Parameter type"; ya esta medido en `cortar`.
    */
-  let tick = aTick(params.segundos);
-  let cuantizado = null;
-  {
-    let tb = null;
-    try { tb = Number(await sequence.getTimebase()); } catch (e) { tb = null; }
-    const antesSeg = aSegundos(tick);
-    if (!isFinite(tb) || tb <= 0) {
-      cuantizado = `NO SE CUANTIZÓ: getTimebase() devolvió ${JSON.stringify(tb)}`;
-    } else {
-      const ticks = Number(tick.ticks);
-      const alineado = ppro.TickTime.createWithTicks(String(Math.round(ticks / tb) * tb));
-      const despuesSeg = aSegundos(alineado);
-      /* La prueba no es que no tire: es que no se haya ido lejos. Medio frame es el maximo
-       * que puede moverse un redondeo correcto. */
-      if (Math.abs(despuesSeg - antesSeg) > 0.5 / (TICKS_POR_SEGUNDO / tb)) {
-        cuantizado = `NO SE CUANTIZÓ: el redondeo se fue de ${antesSeg}s a ${despuesSeg}s`;
-      } else {
-        tick = alineado;
-        cuantizado = Math.abs(despuesSeg - antesSeg) < 0.0005
-          ? "ya caía en un frame"
-          : `cuantizado al frame: se pidió ${antesSeg.toFixed(4)}s y quedó en ${despuesSeg.toFixed(4)}s`;
-      }
-    }
-  }
+  const q = await cuantizarAlFrame(sequence, aTick(params.segundos));
+  let tick = q.tick;
+  const cuantizado = q.dicho;
   const segundosReales = aSegundos(tick);
   const duracion = aTick(typeof params.duracion === "number" ? params.duracion : 0);
 
-  const traer = async () => await (await ppro.Markers.getMarkers(sequence)).getMarkers();
+  const traer = async () => await (await ppro.Markers.getMarkers(objetivo.sujeto)).getMarkers();
   const listaAntes = await traer();
   const antes = listaAntes.length;
   const guidsAntes = listaAntes.map((m) => String(m.guid));
@@ -7649,7 +7804,7 @@ async function marcar(params) {
    * y se exige que coincidan NOMBRE Y COMENTARIO; si no, se lo saca y se sigue
    * probando.
    */
-  const col = await ppro.Markers.getMarkers(sequence);
+  const col = await ppro.Markers.getMarkers(objetivo.sujeto);
   const formas = [
     ["(nombre, comentario, tick, duracion, tipo)",
       () => col.createAddMarkerAction(nombre, comentario, tick, duracion, ppro.Marker.MARKER_TYPE_COMMENT)],
@@ -7769,10 +7924,22 @@ async function marcar(params) {
 
   return {
     resumen:
-      `Marcador "${puesto.nombre}" en ${segundosReales}s de "${sequence.name}": ` +
+      `Marcador "${puesto.nombre}" en ${segundosReales}s de ${objetivo.dondeEsta}: ` +
       `${antes} → ${despues} marcadores · comentario guardado: "${puesto.comentario}" · ` +
-      `${cuantizado} · vía ${via}${colorDicho}` + (colorPedido === null ? " · se deshace con Cmd+Z" : ""),
+      `${cuantizado} · vía ${via}${colorDicho}` +
+      /*
+       * Los dos avisos del marcador de clip son consecuencias que NO se ven y que cambian lo que
+       * uno tiene que pasar: el tiempo es de FUENTE —pasar uno de timeline lo pone en otro lado
+       * sin error— y el marcador vive en el MEDIO, asi que aparece en toda instancia.
+       */
+      (objetivo.esClip
+        ? ` · OJO: es un marcador del MEDIO, asi que ${segundosReales}s es TIEMPO DE FUENTE y el ` +
+          "marcador se va a ver en TODA instancia de ese material, no solo en este clip"
+        : "") +
+      (colorPedido === null ? " · se deshace con Cmd+Z" : ""),
     secuencia: sequence.name,
+    enClip: objetivo.esClip,
+    donde: objetivo.dondeEsta,
     segundos: segundosReales,
     segundosPedidos: params.segundos,
     cuantizado: cuantizado,
@@ -7821,6 +7988,182 @@ function nombreDeColor(indice) {
   return "índice " + indice;
 }
 
+async function sujetoDeMarcadores(sequence, params) {
+  if (!params.clip && params.pista === undefined) {
+    return { sujeto: sequence, dondeEsta: `la secuencia "${sequence.name}"`, esClip: false };
+  }
+  const donde = await ubicarClip(sequence, {
+    nombre: params.clip || params.nombre, pista: params.pista, indice: params.indice
+  });
+  const candidatos = [];
+  try {
+    const ci = ppro.ClipProjectItem.cast(await donde.clip.getProjectItem());
+    if (ci) candidatos.push([`el medio de "${donde.nombre}"`, ci]);
+  } catch (e) { /* sigue con el TrackItem */ }
+  candidatos.push([`el clip "${donde.nombre}" (${donde.pista})`, donde.clip]);
+  const porQue = [];
+  for (const [comoSeLlama, cand] of candidatos) {
+    try {
+      const c = await ppro.Markers.getMarkers(cand);
+      const l = await c.getMarkers();
+      if (l) return { sujeto: cand, dondeEsta: comoSeLlama, esClip: true, clip: donde };
+    } catch (e) { porQue.push(comoSeLlama + ": " + (e && e.message ? e.message : e)); }
+  }
+  throw new Error(`No se pudo leer los marcadores de "${donde.nombre}". ${porQue.join(" | ")}.`);
+}
+
+async function cuantizarAlFrame(sequence, tick) {
+  let tb = null;
+  try { tb = Number(await sequence.getTimebase()); } catch (e) { tb = null; }
+  const antesSeg = aSegundos(tick);
+  if (!isFinite(tb) || tb <= 0) {
+    return { tick: tick, dicho: `NO SE CUANTIZÓ: getTimebase() devolvió ${JSON.stringify(tb)}` };
+  }
+  const alineado = ppro.TickTime.createWithTicks(String(Math.round(Number(tick.ticks) / tb) * tb));
+  const despuesSeg = aSegundos(alineado);
+  /*
+   * La prueba no es que no tire: es que no se haya ido lejos. Medio frame es el maximo que puede
+   * moverse un redondeo correcto.
+   *
+   * Y se compara EN CUADROS con una tolerancia, no en segundos con un `>` pelado. Un valor que
+   * cae EXACTO a medio cuadro —3,5s a 25fps son 87,5 cuadros— da una diferencia de
+   * 0,020000000000000018 contra un limite de 0,02, asi que el `>` lo rechazaba y devolvia el tick
+   * SIN cuantizar. Se detecto midiendo: se pidio `duracion: 3.5` y volvio 3,5 en vez de 3,52.
+   * Es la guarda contra el error imaginado rechazando el caso correcto, otra vez, y por punto
+   * flotante — el mismo `undefined !== undefined` con otro disfraz.
+   */
+  const movidoEnCuadros = Math.abs(despuesSeg - antesSeg) * (TICKS_POR_SEGUNDO / tb);
+  if (movidoEnCuadros > 0.5 + 1e-6) {
+    return { tick: tick, dicho: `NO SE CUANTIZÓ: el redondeo se fue de ${antesSeg}s a ${despuesSeg}s` };
+  }
+  return {
+    tick: alineado,
+    dicho: Math.abs(despuesSeg - antesSeg) < 0.0005
+      ? "ya caía en un frame"
+      : `cuantizado al frame: se pidió ${antesSeg.toFixed(4)}s y quedó en ${despuesSeg.toFixed(4)}s`
+  };
+}
+
+async function editarMarcador(params) {
+  const { project, sequence } = await getProyectoYSecuencia();
+  const objetivo = await sujetoDeMarcadores(sequence, params);
+  const col = await ppro.Markers.getMarkers(objetivo.sujeto);
+  const lista = await col.getMarkers();
+  if (!lista.length) throw new Error(`${objetivo.dondeEsta} no tiene marcadores. Creálos con \`marcar\`.`);
+
+  /*
+   * A CUAL. Por `marcador` (nombre, coincidencia parcial) o por `indice`. Con nombre se exige que
+   * sea UNO SOLO: elegir el primero de varios es adivinar sobre una escritura que no deja rastro
+   * —un marcador movido no se ve hasta que alguien lo busca donde estaba—, y este repo ya decidio
+   * lo mismo para `moverKeyframe` y para el emparejado de proxies.
+   */
+  let m = null, cual = "";
+  const nombres = [];
+  for (let i = 0; i < lista.length; i++) nombres.push(String(await lista[i].getName()));
+  if (typeof params.indice === "number" && !params.clip && params.pista === undefined) {
+    if (params.indice < 0 || params.indice >= lista.length) {
+      throw new Error(`Hay ${lista.length} marcador(es) en ${objetivo.dondeEsta}; se pidió el ${params.indice}.`);
+    }
+    m = lista[params.indice]; cual = `#${params.indice} "${nombres[params.indice]}"`;
+  } else if (params.marcador) {
+    const q = String(params.marcador).toLowerCase();
+    const hit = [];
+    for (let i = 0; i < lista.length; i++) if (nombres[i].toLowerCase().indexOf(q) !== -1) hit.push(i);
+    if (!hit.length) {
+      throw new Error(`Ningún marcador de ${objetivo.dondeEsta} coincide con "${params.marcador}". ` +
+        `Hay ${lista.length}: ${nombres.slice(0, 25).join(", ")}${lista.length > 25 ? "…" : ""}.`);
+    }
+    if (hit.length > 1) {
+      throw new Error(`"${params.marcador}" coincide con ${hit.length} marcadores ` +
+        `(${hit.map((i) => `#${i} "${nombres[i]}"`).join(", ")}). Pedí uno por \`indice\` — elegir ` +
+        "el primero sería adivinar, y un marcador movido no deja rastro de dónde estaba.");
+    }
+    m = lista[hit[0]]; cual = `#${hit[0]} "${nombres[hit[0]]}"`;
+  } else {
+    throw new Error("Falta decir cuál: `marcador` (nombre) o `indice`.");
+  }
+
+  const foto = async (mk) => {
+    const o = { segundos: null, duracion: null, color: null };
+    try { o.segundos = Number(aSegundos(await mk.getStart()).toFixed(3)); } catch (e) { /* queda null */ }
+    try { o.duracion = Number(aSegundos(await mk.getDuration()).toFixed(3)); } catch (e) { /* queda null */ }
+    try { o.color = await mk.getColorIndex(); } catch (e) { /* queda null */ }
+    return o;
+  };
+  const antes = await foto(m);
+
+  const pedidos = [];
+  /*
+   * Se informa la cuantizacion de CADA cosa, no solo la del movimiento. La primera version
+   * guardaba un unico `cuantizado` —el del tiempo— y el del rango se perdia: con `duracion: 3.5`
+   * el verbo decia que todo habia salido y el rango se habia quedado sin alinear. Un dato que no
+   * llega al resumen es un dato que no esta.
+   */
+  const dichos = [];
+  if (typeof params.segundos === "number") {
+    const q = await cuantizarAlFrame(sequence, aTick(params.segundos));
+    dichos.push("tiempo: " + q.dicho);
+    pedidos.push(["mover", () => col.createMoveMarkerAction(m, q.tick), "segundos", aSegundos(q.tick)]);
+  }
+  if (typeof params.duracion === "number") {
+    /* El rango tambien va en la grilla: un marcador que empieza en cuadro y dura 1,013s termina
+     * entre cuadros, que es la mitad del mismo defecto. */
+    const q = await cuantizarAlFrame(sequence, aTick(params.duracion));
+    dichos.push("rango: " + q.dicho);
+    pedidos.push(["duración", () => m.createSetDurationAction(q.tick), "duracion", aSegundos(q.tick)]);
+  }
+  if (typeof params.color === "number") {
+    pedidos.push(["color", () => m.createSetColorByIndexAction(params.color), "color", params.color]);
+  }
+  if (!pedidos.length) throw new Error("No se pidió ningún cambio: pasá `segundos`, `duracion` o `color`.");
+
+  const corridas = [];
+  for (const [comoSeLlama, fabrica] of pedidos) {
+    let ok = false;
+    try {
+      project.lockedAccess(() => {
+        ok = project.executeTransaction((a) => { a.addAction(fabrica()); }, "editar marcador: " + comoSeLlama);
+      });
+    } catch (e) { corridas.push(`${comoSeLlama}: tiró ${(e && e.message) || e}`); continue; }
+    corridas.push(`${comoSeLlama}: transacción ${ok}`);
+  }
+
+  /* EL VEREDICTO, releyendo. `executeTransaction` devolviendo true no prueba que el valor entro:
+   * es el modo de fallar nº1 de este archivo. */
+  const despues = await foto(m);
+  const mal = [];
+  for (const [comoSeLlama, , campo, valor] of pedidos) {
+    const real = despues[campo];
+    if (real === null) { mal.push(`${comoSeLlama}: no se pudo releer`); continue; }
+    const tol = campo === "color" ? 0.5 : 0.021;
+    if (Math.abs(real - valor) > tol) mal.push(`${comoSeLlama}: se pidió ${valor} y quedó ${real}`);
+  }
+
+  return {
+    resumen:
+      `Marcador ${cual} de ${objetivo.dondeEsta}: ` +
+      `${antes.segundos}s +${antes.duracion} color ${antes.color}  →  ` +
+      `${despues.segundos}s +${despues.duracion} color ${despues.color}` +
+      (dichos.length ? ` · ${dichos.join(" · ")}` : "") +
+      (mal.length ? ` · NO QUEDÓ COMO SE PIDIÓ: ${mal.join("; ")}` : "") +
+      ` · ${pedidos.length} transacción(es), o sea ${pedidos.length} Cmd+Z`,
+    antes: antes,
+    despues: despues,
+    cambios: corridas,
+    problemas: mal,
+    enClip: objetivo.esClip,
+    donde: objetivo.dondeEsta
+  };
+}
+
+function nombreDeItem(it) {
+  if (!it) return null;
+  try {
+    const n = it.name;
+    return (n === undefined || n === null) ? null : String(n);
+  } catch (e) { return null; }
+}
+
 /** Saca un marcador por nombre, o todos los que coincidan. */
 async function desmarcar(params) {
   const { project, sequence } = await getProyectoYSecuencia();
@@ -7836,40 +8179,7 @@ async function desmarcar(params) {
    * Por defecto sigue siendo la secuencia, así que nada de lo que ya funcionaba
    * cambia de comportamiento.
    */
-  let sujeto = sequence, dondeEsta = `la secuencia "${sequence.name}"`;
-  if (params.clip || params.pista !== undefined) {
-    const donde = await ubicarClip(sequence, {
-      nombre: params.clip || params.nombre, pista: params.pista, indice: params.indice
-    });
-    /*
-     * EL SUJETO ES EL MEDIO, no el TrackItem.
-     *
-     * `Markers.getMarkers(trackItem)` contesta "Invalid parameter." —tipos bien,
-     * valor mal— y los marcadores que crea la detección de escenas viven en el
-     * ClipProjectItem. Consecuencia que importa al usarlos: son del MATERIAL, así
-     * que se ven en toda instancia de ese medio, no sólo en el clip que se analizó.
-     *
-     * Se prueban los dos y se informa cuál contestó, porque "marcador de clip" en
-     * esta API puede significar cualquiera de los dos y no está documentado.
-     */
-    const candidatos = [];
-    try {
-      const ci = ppro.ClipProjectItem.cast(await donde.clip.getProjectItem());
-      if (ci) candidatos.push(["el medio de \"" + donde.nombre + "\"", ci]);
-    } catch (e) { /* sigue con el TrackItem */ }
-    candidatos.push([`el clip "${donde.nombre}" (${donde.pista})`, donde.clip]);
-    let porQue = [];
-    for (const [comoSeLlama, cand] of candidatos) {
-      try {
-        const c = await ppro.Markers.getMarkers(cand);
-        const l = await c.getMarkers();
-        if (l) { sujeto = cand; dondeEsta = comoSeLlama; porQue = null; break; }
-      } catch (e) { porQue.push(comoSeLlama + ": " + (e && e.message ? e.message : e)); }
-    }
-    if (porQue) {
-      throw new Error(`No se pudo leer los marcadores de "${donde.nombre}". ${porQue.join(" | ")}.`);
-    }
-  }
+  const { sujeto, dondeEsta } = await sujetoDeMarcadores(sequence, params);
   const col = await ppro.Markers.getMarkers(sujeto);
   const lista = await col.getMarkers();
 
@@ -9239,14 +9549,16 @@ async function etiquetar(params) {
    */
   const encontrados = [];
   const todos = [];
+  let saltados = 0;
   const recorrer = async (carpeta, prof) => {
     if (prof > 8) return;
     const hijos = await hijosDe(carpeta);
     if (!hijos) return;
     for (let i = 0; i < hijos.length; i++) {
+      const n = nombreDeItem(hijos[i]);
+      if (n === null) { saltados++; continue; }
       const sub = await hijosDe(hijos[i]);
       if (sub === null) {
-        const n = String(hijos[i].name);
         todos.push(n);
         if (!pedidos) { encontrados.push({ nombre: n, item: hijos[i], pedido: null }); continue; }
         // Exacto primero: un parcial puede agarrar de más y etiquetar lo que no era.
@@ -9323,6 +9635,7 @@ async function etiquetar(params) {
       (ok ? "" : " · OJO: executeTransaction devolvió false") +
       (fallaron.length ? ` · NO ENTRÓ en ${fallaron.length}: ${fallaron.slice(0, 5).join(", ")}` : "") +
       (porParcial.length ? ` · ${porParcial.length} por coincidencia PARCIAL: ${porParcial.slice(0, 5).join(", ")}` : "") +
+      (saltados ? ` · OJO: ${saltados} item(s) del panel no se pudieron leer y se saltearon` : "") +
       " · un Cmd+Z lo saca (una sola transacción)",
     color: comoSeLlama, indice: indice,
     pedidos: pedidos ? pedidos.length : null,
@@ -9655,6 +9968,7 @@ async function subclip(params) {
 
   /* Recorrido único del panel: se listan los nombres para saber si el subclip
    * apareció y para no chocar con uno que ya exista. */
+  let saltados = 0;
   const nombres = async () => {
     const out = [];
     const ver = async (item, prof) => {
@@ -9662,8 +9976,10 @@ async function subclip(params) {
       const hijos = await hijosDe(item);
       if (!hijos) return;
       for (let i = 0; i < hijos.length; i++) {
+        const n0 = nombreDeItem(hijos[i]);
+        if (n0 === null) { saltados++; continue; }
         const sub = await hijosDe(hijos[i]);
-        if (sub === null) out.push(String(hijos[i].name));
+        if (sub === null) out.push(n0);
         else await ver(hijos[i], prof + 1);
       }
     };
@@ -9722,6 +10038,7 @@ async function subclip(params) {
       `(${(hasta - desde).toFixed(2)}s) · vía ${via} · el panel pasó de ${antes.length} a ${despues.length} item(s)` +
       (dur ? " · con límites duros" : " · sin límites duros: se puede extender más allá del rango") +
       (intentos.length ? ` · descartadas: ${intentos.length} forma(s)` : "") +
+      (saltados ? ` · OJO: ${saltados} item(s) del panel no se pudieron leer y se saltearon` : "") +
       " · un Cmd+Z lo saca",
     subclip: params.nombre, medio: String(encontrado.name),
     desde: desde, hasta: hasta, dura: Number((hasta - desde).toFixed(3)),
@@ -10579,7 +10896,7 @@ async function colocarLote(params) {
   };
 }
 
-const VERBOS = { relink, clonar, proyectosAbiertos, cerrarProyecto, colocarLote, abrirProyecto, crearProyecto, copiarEfecto, quitarEfecto, borrarKeyframe, moverKeyframe, curvaKeyframe, leerParam, sondaParam, radiografia, desactivar, estado, guardar, bins, exportar, cortesDeEscena, etiquetar, interpretar, proxy, subclip, renombrarPista, renombrar, revisar, importar, importarTranscripcion, motion, keyframe, frame, playhead, clips, seleccionar, efectos, param, editar, catalogo, agregarEfecto, medios, insertar, secuencias, borrar, transcripcion, armarSecuencia, borrarSecuencia, vistazo, mirarMedio, analizar, marcadores, marcar, desmarcar, cortar, sacarRangos, cerrarHuecos, resolucion, ajustarAlCuadro, escalaFija, fijar, unirAudio, aplicarEscalas, aplicarZooms, leerEscalas, aplicarAnim, unirVideo, duplicarSecuencia, api };
+const VERBOS = { relink, clonar, proyectosAbiertos, cerrarProyecto, colocarLote, abrirProyecto, crearProyecto, copiarEfecto, quitarEfecto, borrarKeyframe, moverKeyframe, curvaKeyframe, leerParam, sondaParam, radiografia, desactivar, estado, guardar, bins, exportar, cortesDeEscena, etiquetar, interpretar, proxy, subclip, renombrarPista, renombrar, revisar, importar, importarTranscripcion, motion, keyframe, frame, playhead, clips, seleccionar, efectos, param, editar, catalogo, agregarEfecto, medios, insertar, secuencias, borrar, transcripcion, armarSecuencia, borrarSecuencia, vistazo, mirarMedio, analizar, marcadores, marcar, desmarcar, editarMarcador, cortar, sacarRangos, cerrarHuecos, resolucion, ajustarAlCuadro, escalaFija, fijar, unirAudio, aplicarEscalas, aplicarZooms, leerEscalas, aplicarAnim, unirVideo, duplicarSecuencia, api };
 
 
 /*
@@ -10653,15 +10970,16 @@ const PARAMS_DE = {
   vistazo: ["ancho", "cuantos", "desde", "hasta"],
   mirarMedio: ["ancho", "cuantos", "medio", "tiempos"],
   analizar: ["ancho", "cuantos", "medio"],
-  marcadores: [],
-  marcar: ["color", "comentario", "duracion", "nombre", "segundos"],
+  marcadores: ["clip", "indice", "nombre", "pista"],
+  editarMarcador: ["clip", "color", "duracion", "indice", "marcador", "nombre", "pista", "segundos"],
+  marcar: ["clip", "color", "comentario", "duracion", "indice", "nombre", "pista", "segundos"],
   desmarcar: ["clip", "indice", "nombre", "pista", "todos"],
   cortar: ["indice", "nombre", "pista", "segundos", "soloVideo"],
   sacarRangos: ["pista", "rangos"],
   cerrarHuecos: ["pista", "tope"],
   resolucion: ["alto", "ancho", "fps"],
   ajustarAlCuadro: ["solo"],
-  escalaFija: ["pista", "valor"],
+  escalaFija: ["desdeIndice", "limite", "pista", "valor"],
   fijar: ["efecto", "indice", "indiceParam", "nombre", "param", "pista", "valor", "x", "y"],
   unirAudio: [],
   aplicarEscalas: ["desdeIndice", "limite", "pista", "plan", "porTransaccion"],
@@ -10817,6 +11135,43 @@ async function ejecutar(cmd, params) {
         `"${cmd}" se pidió sobre el proyecto "${p.proyecto}" y el que tiene foco es "${nom}". ` +
         "NO se ejecutó nada. Traelo al frente en Premiere y volvé a intentar."
       );
+    }
+    /*
+     * Y SI EL PARCIAL ES AMBIGUO, REBOTA. Este era el resto del pendiente de la subcadena.
+     *
+     * El match parcial es deliberado y se usa —pedir el nombre corto y que enganche el largo—,
+     * asi que sacarlo romperia llamadas correctas. Lo que no es deliberado es que el
+     * mismo texto pueda referirse a DOS proyectos abiertos: ahi la guarda contesta que si sobre
+     * el que tiene foco, y el usuario creia estar hablando del otro. Es exactamente el escenario
+     * para el que la guarda existe, sobreviviendo adentro de la guarda.
+     *
+     * Solo se paga la consulta cuando el match es PARCIAL: si el nombre coincide EXACTO no hay
+     * nada que desambiguar, que es el caso normal y no cuesta una llamada de mas.
+     *
+     * Si no se puede enumerar, se SIGUE: no poder averiguar no es estar en peligro, y frenar
+     * ahi rechazaria uso correcto — la regla de este repo para toda guarda.
+     */
+    if (nom.toLowerCase() !== p.proyecto.toLowerCase()) {
+      let abiertos = [];
+      try {
+        const ids = await ppro.ProjectUtils.getProjectViewIds();
+        for (const id of (ids || [])) {
+          try {
+            const pr = await ppro.ProjectUtils.getProjectFromViewId(id);
+            const r = pr && pr.path ? String(pr.path) : "";
+            const n2 = r ? r.split("/").pop().replace(/\.prproj$/i, "") : (pr && pr.name ? String(pr.name) : "");
+            if (n2 && abiertos.indexOf(n2) === -1) abiertos.push(n2);
+          } catch (e) { /* ese no se pudo leer: sigue */ }
+        }
+      } catch (e) { abiertos = []; }
+      const coinciden = abiertos.filter((n2) => n2.toLowerCase().indexOf(p.proyecto.toLowerCase()) !== -1);
+      if (coinciden.length > 1) {
+        throw new Error(
+          `"${cmd}" se pidió sobre "${p.proyecto}" y eso coincide PARCIALMENTE con ${coinciden.length} ` +
+          `proyectos abiertos: ${coinciden.map((x) => `"${x}"`).join(", ")}. El que tiene foco es "${nom}", ` +
+          "pero no hay forma de saber si es el que querías. NO se ejecutó nada: pasá el nombre completo."
+        );
+      }
     }
   }
   if (typeof p.secuencia === "string" && p.secuencia.trim()) {

@@ -104,6 +104,43 @@ function exigirPremiere() {
   return false;
 }
 
+/*
+ * LA PANTALLA BLOQUEADA, que es la CUARTA causa distinta de "el macro no anduvo".
+ *
+ * Con el login screen puesto, Keyboard Maestro NO puede inyectar teclas en ninguna app: el
+ * macro corre, KM no tira error, y Premiere no se entera. El 2026-09-16 costó TRES intentos y
+ * dos esperas de 60s, con el informe culpando al macro y al cartel — y encima dejando el
+ * transporte trabado, que es lo correcto para un cierre que no termina pero un desperdicio
+ * cuando la causa se puede leer en un comando.
+ *
+ * Las otras tres ya estaban anotadas: la sesión remota, el macro equivocado (`Load` con el panel
+ * caído contra `Reload`) y la ventana de UDT sin foco.
+ *
+ * `CGSSessionScreenIsLocked` sale de `ioreg` y no necesita Quartz — el `python3` del sistema no
+ * lo trae, y ese fue el primer intento de detectarlo, que fallo por importar un modulo ausente.
+ *
+ * Y sólo BLOQUEA cuando la respuesta es un Yes explícito: si la clave no aparece —otra versión
+ * de macOS, otro formato— se sigue adelante. Una guarda que frena porque no pudo averiguar
+ * rechaza uso correcto, que es su peor modo de fallo y la regla de este repo.
+ */
+function pantallaBloqueada() {
+  try {
+    const o = require("child_process").execFileSync("ioreg", ["-n", "Root", "-d1", "-r"],
+      { encoding: "utf8", timeout: 5000 });
+    const m = o.match(/CGSSessionScreenIsLocked"?\s*=\s*(\w+)/);
+    return !!(m && /^(Yes|true)$/i.test(m[1]));
+  } catch (e) { return false; }
+}
+
+function exigirPantallaDesbloqueada(paraQue) {
+  if (!pantallaBloqueada()) return true;
+  console.error(`  LA PANTALLA ESTA BLOQUEADA, asi que ${paraQue} no va a llegar.`);
+  console.error("  Keyboard Maestro no puede inyectar teclas con el login screen puesto: el macro");
+  console.error("  corre, KM no tira error, y la app no se entera. NO disparo nada.");
+  console.error("  Desbloquea la pantalla y volve a correr esto.");
+  return false;
+}
+
 function osa(script, timeout) {
   try {
     return require("child_process").execFileSync("osascript", ["-e", script],
@@ -141,6 +178,10 @@ async function prepararUDT() {
 
 /* El estado del entorno EN EL MOMENTO DEL FALLO, que es cuando explica algo. */
 function porQueNoAndubo() {
+  if (pantallaBloqueada()) {
+    return "y LA PANTALLA ESTA BLOQUEADA: con el login screen puesto Keyboard Maestro no puede " +
+           "inyectar teclas en ninguna app. Desbloquea y reintenta.";
+  }
   const udt = corriendo("UXP Developer");
   const f = alFrente();
   if (!udt) return "y UDT NI SIQUIERA ESTA ABIERTO.";
@@ -243,6 +284,8 @@ async function reiniciarPremiere() {
     console.error("  `guardar` no devolvió la ruta del proyecto, así que no sabría cuál reabrir. No cierro.");
     return false;
   }
+
+  if (!exigirPantallaDesbloqueada("el Cmd+Q")) return false;
 
   const marca = Date.now();
   if (!osa(`tell application "Keyboard Maestro Engine" to do script "${MACRO_CERRAR}"`, 20000) &&

@@ -133,6 +133,7 @@ claude mcp add premiere-bridge --scope user -- node /RUTA/A/TU/COPIA/premiere-br
 | `premiere_marcadores` | Los marcadores de la secuencia, con comentario y color |
 | `premiere_marcar` | Deja un marcador en un segundo, con nombre, comentario y color |
 | `premiere_desmarcar` | Saca marcadores por nombre, o todos |
+| `premiere_editar_marcador` | Mueve un marcador, le cambia el color o el rango, sin rehacerlo |
 | `premiere_transcripcion` | El texto del clip con tiempos de secuencia, o dónde dice algo |
 | `premiere_armar_secuencia` | Crea una secuencia y le pega fragmentos de un medio |
 | `premiere_borrar_secuencia` | Saca una secuencia del proyecto |

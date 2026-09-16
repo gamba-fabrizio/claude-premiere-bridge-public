@@ -519,11 +519,28 @@ if (!HAY_MATERIAL) {
    * ni lee valores de param. Medido el 2026-09-05 en un proyecto pesado: la lectura inmediata
    * ve el estado recien escrito 8 de 8 veces sobre un valor y 6 de 6 sobre un clip
    * recien insertado, con solo los ~203ms del transporte en el medio. */
-  const fin = (await enviar("clips", g({ pista: "V" + PISTA }))).clips || [];
+  /*
+   * SE RELEEN LAS DOS PISTAS, la de video Y la de audio.
+   *
+   * Esto leia solo V{PISTA}, y un medio SIN VIDEO —un .wav de locucion— no pone nada ahi: la
+   * relectura informaba "nada en 0s", "nada en 74.44s"… y cerraba con "6 PROBLEMA(S)" sobre seis
+   * clips que habian entrado perfectos en A2. Pasó el 2026-09-16 colocando las locuciones del
+   * video 3, y el informe es exactamente al reves de la verdad: el modo de fallo mas caro de una
+   * verificacion, porque manda a rehacer trabajo que estaba bien.
+   *
+   * Es el contador ciego de `cortesDeEscena` otra vez —el que hizo correr el analisis cuatro
+   * veces y dejo 68 marcadores de mas— y el mismo que `insertar` ya habia pagado con el .wav del
+   * tema mirando solo la pista de video. Tercera aparicion, tercer verbo.
+   */
+  // Sin pausa entre las dos: el espaciado existe contra rafagas de TRANSACCIONES y `clips` no
+  // transacciona. Medido, y `test.js` rechaza una pausa antes de una lectura.
+  const finV = (await enviar("clips", g({ pista: "V" + PISTA }))).clips || [];
+  const finA = (await enviar("clips", g({ pista: "A" + PISTA_AUDIO }))).clips || [];
+  const fin = finV.concat(finA);
   console.log(`\n${puestos.length} de ${plan.length} colocados` +
               (fallados.length ? ` · ${fallados.length} fallaron` : ""));
   for (const f of fallados) console.log(`  ✗ ${f.p.clip.slice(-30)}: ${f.por}`);
-  console.log(`\nrelectura de V${PISTA}: ${fin.length} clips`);
+  console.log(`\nrelectura: V${PISTA} ${finV.length} clips · A${PISTA_AUDIO} ${finA.length} clips`);
   let malos = 0;
   for (const p of plan) {
     const c = fin.find((x) => Math.abs(x.desde - p.desde) < 0.05);

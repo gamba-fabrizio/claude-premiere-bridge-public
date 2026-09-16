@@ -986,6 +986,15 @@ server.registerTool(
       "Se aplica por CLIP, así que no toca ese material en otras secuencias. Contempla que el " +
       "param se llame \"Scale\" o \"Scale Height\" según la casilla Uniform Scale.",
     inputSchema: {
+      limite: z.number().int().min(1).optional().describe(
+        "Cuantos clips tocar en esta llamada. Default 30. Existe porque este verbo hace una "
+        + "lectura de valor POR CLIP —el regimen que tiro Premiere— y 32 clips de 4K a 50fps lo "
+        + "mataron donde 35 verticales habian pasado: la variable es el PESO del material."
+      ),
+      desdeIndice: z.number().int().min(0).optional().describe(
+        "Desde que clip seguir. Sale de `siguiente` en la respuesta anterior; el resumen avisa "
+        + "cuando quedo a medias."
+      ),
       secuencia: z.string().optional().describe("Guarda: si la secuencia activa no es ésta, no se ejecuta nada."),
       proyecto: z
         .string()
@@ -1984,6 +1993,14 @@ server.registerTool(
       "para destacar, cosas a chequear. Si en cambio querés que se vea en el timeline y cubra " +
       "un rango, va un Transparent Video renombrado (premiere_insertar + premiere_renombrar).",
     inputSchema: {
+      clip: z.string().optional().describe(
+        "Para marcar un CLIP en vez de la secuencia: nombre (o parte) del clip. OJO: el marcador "
+        + "queda en el MEDIO, asi que `segundos` es TIEMPO DE FUENTE y el marcador se ve en TODA "
+        + "instancia de ese material. Es lo que se quiere para una grilla de beats sobre una pista "
+        + "de musica: sobrevive a mover el audio, cosa que un marcador de secuencia no hace."
+      ),
+      pista: z.string().optional().describe("Alternativa a `clip`: la pista, por ejemplo \"V1\" o \"A2\"."),
+      indice: z.number().int().min(0).optional().describe("Con `pista`: el indice del clip en esa pista."),
       secuencia: z.string().optional().describe("Guarda: si la secuencia activa no es ésta, no se ejecuta nada."),
       proyecto: z
         .string()
@@ -2027,7 +2044,17 @@ server.registerTool(
           + "foco en Premiere es otro, la llamada REBOTA sin ejecutar nada. Va en TODAS las "
           + "herramientas a proposito: una guarda que hay que acordarse de tener no esta cuando hace falta."
         ),
-      segundos: z.number().min(0).describe("Dónde va, en segundos de la secuencia."),
+      segundos: z.number().min(0).describe(
+        "Dónde va. En segundos de la SECUENCIA, salvo que se apunte a un clip: ahí es tiempo de FUENTE."
+      ),
+      clip: z.string().optional().describe(
+        "Para marcar un CLIP en vez de la secuencia: nombre (o parte) del clip. OJO: el marcador "
+        + "queda en el MEDIO, asi que `segundos` es TIEMPO DE FUENTE y el marcador se ve en TODA "
+        + "instancia de ese material. Es lo que se quiere para una grilla de beats sobre una pista "
+        + "de musica: sobrevive a mover el audio, cosa que un marcador de secuencia no hace."
+      ),
+      pista: z.string().optional().describe("Alternativa a `clip`: la pista, por ejemplo \"V1\" o \"A2\"."),
+      indice: z.number().int().min(0).optional().describe("Con `pista`: el indice del clip en esa pista."),
       nombre: z.string().optional().describe("El texto que se ve en el marcador. Por defecto \"Nota\"."),
       comentario: z.string().optional().describe("El texto largo, que se ve al abrirlo."),
       color: z
@@ -2076,6 +2103,50 @@ server.registerTool(
   async (args) => {
     try {
       const r = await enviar("desmarcar", args);
+      return texto(r.resumen, r);
+    } catch (e) {
+      return fallo(e);
+    }
+  }
+);
+
+
+
+server.registerTool(
+  "premiere_editar_marcador",
+  {
+    title: "Cambiar un marcador ya puesto",
+    description:
+      "Mueve un marcador, le cambia el color o le cambia el RANGO, sin borrarlo y rehacerlo.\n\n" +
+      "Hasta ahora corregir un marcador mal puesto era sacarlo y volver a crearlo con su nombre, " +
+      "su comentario y su color. Se pueden pedir los tres cambios juntos; cada uno es una " +
+      "transaccion, asi que el resumen dice cuantos Cmd+Z hacen falta.\n\n" +
+      "EL MOVIMIENTO SE CUANTIZA AL FRAME. La API no lo hace —pedir 9,017s a 25fps deja 9,02, " +
+      "medio cuadro— y un marcador subframe deja de decir donde esta el corte.\n\n" +
+      "Se apunta por `marcador` (nombre) o por `indice`. Si el nombre coincide con varios, REBOTA " +
+      "en vez de elegir: un marcador movido no deja rastro de donde estaba.",
+    inputSchema: {
+      secuencia: z.string().optional().describe("Guarda: si la secuencia activa no es ésta, no se ejecuta nada."),
+      proyecto: z
+        .string()
+        .optional()
+        .describe(
+          "GUARDA: nombre (o parte) del proyecto sobre el que se quiere operar. Si el que tiene "
+          + "foco en Premiere es otro, la llamada REBOTA sin ejecutar nada. Va en TODAS las "
+          + "herramientas a proposito: una guarda que hay que acordarse de tener no esta cuando hace falta."
+        ),
+      marcador: z.string().optional().describe("Nombre (o parte) del marcador a cambiar."),
+      indice: z.number().int().min(0).optional().describe("Alternativa a `marcador`: su posicion en la lista, 0-based."),
+      segundos: z.number().min(0).optional().describe("Nuevo tiempo. Se cuantiza al frame y el resumen dice cuanto movio."),
+      duracion: z.number().min(0).optional().describe("Nuevo RANGO en segundos. 0 lo vuelve un marcador de punto."),
+      color: z.number().int().min(0).max(15).optional().describe("Nuevo color por indice."),
+      clip: z.string().optional().describe("Para editar un marcador DE UN CLIP en vez de uno de la secuencia."),
+      pista: z.string().optional().describe("Pista del clip, tipo V2. Con indice si hay varios.")
+    }
+  },
+  async (args) => {
+    try {
+      const r = await enviar("editarMarcador", args);
       return texto(r.resumen, r);
     } catch (e) {
       return fallo(e);
